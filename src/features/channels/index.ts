@@ -1,0 +1,1 @@
+export { ChannelMatrix } from './ChannelMatrix'
