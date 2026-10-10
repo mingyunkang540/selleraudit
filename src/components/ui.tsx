@@ -31,7 +31,7 @@ const issueLabels: Record<IssueType, string> = { UNMATCHED: '미매칭', PRICE_M
 export function IssueBadge({ type }: { type: IssueType }) { return <span className={`issue-badge issue-${type.toLowerCase()}`}>{issueLabels[type]}</span> }
 const channelStyles: Record<string, { label: string; color: string }> = { NAVER: { label: 'N', color: '#03c75a' }, COUPANG: { label: 'C', color: '#ed4d46' }, GMARKET: { label: 'G', color: '#0aab79' }, OHOUSE: { label: 'H', color: '#32b9df' }, '11ST': { label: '11', color: '#e83860' }, SSG: { label: 'S', color: '#b33979' } }
 export function ChannelBadge({ channel, compact = false }: { channel: Channel; compact?: boolean }) {
-  const item = channelStyles[channel.channelCode] ?? { label: channel.channelCode[0], color: '#758099' }
+  const item = channelStyles[channel.channelCode] ?? { label: channel.channelCode.trim().slice(0, 2).toUpperCase(), color: '#758099' }
   return <span className="channel-badge" title={channel.channelName}><span className="channel-logo" style={{ background: item.color }}>{item.label}</span>{!compact && <span>{channel.channelName}</span>}{compact && <span className="sr-only">{channel.channelName}</span>}</span>
 }
 export function ProductThumb({ name, size = 38 }: { name: string; size?: number }) {

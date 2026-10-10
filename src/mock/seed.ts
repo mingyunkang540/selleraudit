@@ -1,8 +1,8 @@
+import { asChannelCode } from '../types/domain'
 import type {
   Alias,
   AuditIssue,
   Channel,
-  ChannelCode,
   ChannelListing,
   ChannelOffer,
   MappingCandidate,
@@ -97,7 +97,7 @@ const bomDefinitions: Readonly<Record<string, ReadonlyArray<readonly [string, nu
   '100320': [['AL00', 1], ['AQ01', 2], ['AG00', 1]],
 }
 
-const channelDefinitions: ReadonlyArray<readonly [ChannelCode, string]> = [
+const channelDefinitions: ReadonlyArray<readonly [string, string]> = [
   ['NAVER', '네이버 스마트스토어'], ['COUPANG', '쿠팡'], ['GMARKET', 'G마켓'],
   ['OHOUSE', '오늘의집'], ['11ST', '11번가'], ['SSG', 'SSG.COM'],
 ]
@@ -128,7 +128,7 @@ export function createSeedData(): SellerData {
     })
   })
   const channels: Channel[] = channelDefinitions.map(([channelCode, channelName], index) => ({
-    id: entityId('channel', index), workspaceId: WORKSPACE_ID, channelCode, channelName,
+    id: entityId('channel', index), workspaceId: WORKSPACE_ID, channelCode: asChannelCode(channelCode), channelName,
     status: 'ACTIVE', createdAt: at(-180, index),
   }))
   const listings: ChannelListing[] = []

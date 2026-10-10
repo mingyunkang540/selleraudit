@@ -27,7 +27,6 @@ const entityStatuses = new Set(['ACTIVE', 'INACTIVE', 'DRAFT'])
 const issueStatuses = new Set(['OPEN', 'IN_PROGRESS', 'RESOLVED', 'IGNORED'])
 const issueTypes = new Set(['UNMATCHED', 'PRICE_MISMATCH', 'MISSING_CHANNEL', 'INACTIVE_MISMATCH', 'DUPLICATE', 'NEW_LISTING', 'CHANGED_LISTING', 'MISSING_BOM'])
 const severities = new Set(['INFO', 'WARNING', 'ERROR'])
-const channelCodes = new Set(['NAVER', 'COUPANG', 'GMARKET', 'OHOUSE', '11ST', 'SSG'])
 
 function isRecord(value: unknown): value is UnknownRecord {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -35,6 +34,7 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function isUuid(value: unknown): value is string { return typeof value === 'string' && uuidPattern.test(value) }
 function isString(value: unknown): value is string { return typeof value === 'string' }
+function isNonBlankString(value: unknown): value is string { return isString(value) && value.trim().length > 0 }
 function isNullableString(value: unknown): value is string | null { return value === null || typeof value === 'string' }
 function isNullableNumber(value: unknown): value is number | null { return value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0) }
 function isTimestamp(value: unknown): value is string { return typeof value === 'string' && Number.isFinite(Date.parse(value)) }
@@ -84,10 +84,11 @@ function validateDocument(value: unknown): SellerData {
     isNullableString(item.color) && entityStatuses.has(String(item.status)) && isTimestamp(item.createdAt) && isTimestamp(item.updatedAt))) {
     throw new Error('skus are invalid')
   }
-  if (!channels.every((item) => isWorkspaceEntity(item, workspaceId) && channelCodes.has(String(item.channelCode)) &&
+  if (!channels.every((item) => isWorkspaceEntity(item, workspaceId) && isNonBlankString(item.channelCode) &&
     isString(item.channelName) && entityStatuses.has(String(item.status)) && isTimestamp(item.createdAt))) {
     throw new Error('channels are invalid')
   }
+  const channelCodes = new Set(channels.map(item => item.channelCode))
   const productIds = new Set(products.map((item) => item.id))
   const skuIds = new Set(skus.map((item) => item.id))
   const channelIds = new Set(channels.map((item) => item.id))
@@ -109,7 +110,7 @@ function validateDocument(value: unknown): SellerData {
   }
   const offerIds = new Set(offers.map((item) => item.id))
   if (!aliases.every((item) => isWorkspaceEntity(item, workspaceId) && isString(item.rawProductName) &&
-    isNullableString(item.rawOptionName) && (item.sourceChannel === null || channelCodes.has(String(item.sourceChannel))) &&
+    isNullableString(item.rawOptionName) && (item.sourceChannel === null || (isNonBlankString(item.sourceChannel) && channelCodes.has(item.sourceChannel))) &&
     productIds.has(item.masterProductId) && isTimestamp(item.createdAt))) {
     throw new Error('aliases are invalid')
   }

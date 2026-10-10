@@ -2,7 +2,11 @@ export type EntityStatus = 'ACTIVE' | 'INACTIVE' | 'DRAFT'
 export type IssueStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'IGNORED'
 export type IssueType = 'UNMATCHED' | 'PRICE_MISMATCH' | 'MISSING_CHANNEL' | 'INACTIVE_MISMATCH' | 'DUPLICATE' | 'NEW_LISTING' | 'CHANGED_LISTING' | 'MISSING_BOM'
 export type Severity = 'INFO' | 'WARNING' | 'ERROR'
-export type ChannelCode = 'NAVER' | 'COUPANG' | 'GMARKET' | 'OHOUSE' | '11ST' | 'SSG'
+export type ChannelCode = string & { readonly __brand: 'ChannelCode' }
+export function asChannelCode(value: string): ChannelCode {
+  if (!value.trim()) throw new Error('Channel code must not be blank.')
+  return value as ChannelCode
+}
 export interface Workspace { id: string; name: string; createdAt: string; updatedAt: string }
 export interface Product { id: string; workspaceId: string; sabangnetCode: string; productName: string; category: string | null; productType: 'SINGLE' | 'SET'; normalPrice: number | null; status: EntityStatus; createdAt: string; updatedAt: string }
 export interface Sku { id: string; workspaceId: string; skuCode: string; modelName: string; color: string | null; status: EntityStatus; createdAt: string; updatedAt: string }

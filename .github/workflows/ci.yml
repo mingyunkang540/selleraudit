@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+  PGLITE_VERSION: '0.5.8'
+
+jobs:
+  foundation:
+    name: Foundation quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Prepare CI logs
+        run: mkdir -p .ci-logs
+
+      - name: Install locked dependencies
+        run: npm ci 2>&1 | tee .ci-logs/npm-ci.log
+
+      - name: Typecheck
+        run: npm run typecheck 2>&1 | tee .ci-logs/typecheck.log
+
+      - name: Lint
+        run: npm run lint 2>&1 | tee .ci-logs/lint.log
+
+      - name: Run unit tests
+        run: npm run test:unit 2>&1 | tee .ci-logs/unit-tests.log
+
+      - name: Build
+        run: npm run build 2>&1 | tee .ci-logs/build.log
+
+      - name: Install Chromium and system dependencies
+        run: npx playwright install --with-deps chromium 2>&1 | tee .ci-logs/playwright-install.log
+
+      - name: Run Chromium end-to-end tests
+        run: npm run test:e2e -- --project=chromium --reporter=line,html 2>&1 | tee .ci-logs/e2e-tests.log
+        env:
+          CI: 'true'
+
+      - name: Install isolated PGlite runtime
+        run: |
+          npm install \
+            --prefix "${RUNNER_TEMP}/seller-audit-pglite" \
+            --no-save \
+            --package-lock=false \
+            --ignore-scripts \
+            "@electric-sql/pglite@${PGLITE_VERSION}" \
+            2>&1 | tee .ci-logs/pglite-install.log
+
+      - name: Run database contract tests
+        run: |
+          node supabase/tests/pglite/run.mjs \
+            "${RUNNER_TEMP}/seller-audit-pglite/node_modules/@electric-sql/pglite/dist/index.js" \
+            2>&1 | tee .ci-logs/database-contract.log
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .ci-logs/
+            playwright-report/
+            test-results/
+          if-no-files-found: warn
+          retention-days: 14

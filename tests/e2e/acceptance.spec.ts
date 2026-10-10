@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises'
 import { createSeedData, getMockCandidates } from '../../src/mock'
 import { getCellStatus, getOfferDetails } from '../../src/lib/selectors'
 import { STORAGE_KEY } from '../../src/services/mockRepository'
+import { asChannelCode } from '../../src/types/domain'
 import type { SellerData } from '../../src/types/domain'
 
 const seed = createSeedData()
@@ -71,6 +72,19 @@ test('채널 매트릭스는 상태와 동일 셀의 모든 판매 옵션을 Dra
   const drawer = page.getByRole('dialog')
   await expect(drawer.locator('.offer-card')).toHaveCount(pair.details.length)
   for (const detail of pair.details) await expect(drawer).toContainText(detail.listing.channelProductId)
+})
+
+test('새 채널 코드는 매트릭스에 표시되고 상품별 상세를 열 수 있다', async ({ page }) => {
+  const data = createSeedData()
+  data.channels.push({ ...data.channels[0], id: crypto.randomUUID(), channelCode: asChannelCode('WCONCEPT'), channelName: 'W컨셉' })
+  const product = data.products.find((item) => item.sabangnetCode === '100051')!
+  await seedPage(page, data)
+  await page.goto('/#/channels')
+  await expect(page.getByText('7개 판매채널에서 비교합니다.', { exact: false })).toBeVisible()
+  await expect(page.getByRole('columnheader').filter({ hasText: 'W컨셉' })).toBeVisible()
+  await page.getByRole('searchbox', { name: '검색' }).fill(product.sabangnetCode)
+  await page.getByRole('button', { name: `${product.productName}, W컨셉 상세` }).click()
+  await expect(page.getByRole('dialog')).toContainText('W컨셉')
 })
 
 test('데모 추천으로 수동 매핑하면 offer와 alias가 저장되고 새로고침 후 유지된다', async ({ page }) => {

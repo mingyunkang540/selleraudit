@@ -23,7 +23,7 @@ export function ChannelMatrix({ data }: { data: SellerData }) {
   ), [data, query, status])
 
   return <div className="feature-page channel-matrix-page">
-    <PageHeader eyebrow="운영 현황" title="채널 상품 매트릭스" description="기준 상품별 등록 여부와 가격 상태를 6개 판매채널에서 비교합니다." />
+    <PageHeader eyebrow="운영 현황" title="채널 상품 매트릭스" description={`기준 상품별 등록 여부와 가격 상태를 ${data.channels.length}개 판매채널에서 비교합니다.`} />
     <section className="panel">
       <FilterBar>
         <SearchInput value={query} onChange={setQuery} placeholder="상품명, 사방넷 품번, SKU 검색" />

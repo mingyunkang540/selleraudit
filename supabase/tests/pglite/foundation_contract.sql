@@ -63,6 +63,12 @@ insert into public.channels (id, workspace_id, channel_code, channel_name) value
     '10000000-0000-0000-0000-000000000001',
     'NAVER',
     '네이버'
+  ),
+  (
+    '40000000-0000-0000-0000-000000000002',
+    '10000000-0000-0000-0000-000000000002',
+    'WCONCEPT',
+    'Other workspace channel'
   );
 
 insert into public.channel_listings (
@@ -71,13 +77,21 @@ insert into public.channel_listings (
   channel_id,
   channel_product_id,
   product_name
-) values (
-  '50000000-0000-0000-0000-000000000001',
-  '10000000-0000-0000-0000-000000000001',
-  '40000000-0000-0000-0000-000000000001',
-  'N-100',
-  '  채널 원문 상품명  '
-);
+) values
+  (
+    '50000000-0000-0000-0000-000000000001',
+    '10000000-0000-0000-0000-000000000001',
+    '40000000-0000-0000-0000-000000000001',
+    'N-100',
+    '  채널 원문 상품명  '
+  ),
+  (
+    '50000000-0000-0000-0000-000000000002',
+    '10000000-0000-0000-0000-000000000002',
+    '40000000-0000-0000-0000-000000000002',
+    'W-100',
+    'Other workspace listing'
+  );
 
 insert into public.channel_offers (
   id,
@@ -102,6 +116,14 @@ insert into public.channel_offers (
     'SECOND',
     '다른 미매핑 옵션',
     11900
+  ),
+  (
+    '60000000-0000-0000-0000-000000000003',
+    '10000000-0000-0000-0000-000000000002',
+    '50000000-0000-0000-0000-000000000002',
+    'BASE',
+    null,
+    10000
   );
 
 insert into public.audit_issues (
@@ -147,6 +169,17 @@ insert into public.audit_issues (
     'Ignored exact offer issue',
     'A user decision must not be overwritten by mapping.',
     'IGNORED'
+  ),
+  (
+    '70000000-0000-0000-0000-000000000004',
+    '10000000-0000-0000-0000-000000000002',
+    'UNMATCHED',
+    'WARNING',
+    '50000000-0000-0000-0000-000000000002',
+    '60000000-0000-0000-0000-000000000003',
+    'Other workspace issue',
+    'Must not be changed by workspace A.',
+    'OPEN'
   );
 
 do $$
@@ -195,6 +228,16 @@ begin
   begin
     perform 1 from public.products;
     raise exception 'Expected anonymous product access to be denied.';
+  exception
+    when insufficient_privilege then null;
+  end;
+
+  begin
+    perform public.map_offer(
+      '60000000-0000-0000-0000-000000000001',
+      '20000000-0000-0000-0000-000000000001'
+    );
+    raise exception 'Expected anonymous RPC access to be denied.';
   exception
     when insufficient_privilege then null;
   end;
@@ -263,6 +306,65 @@ begin
   exception
     when insufficient_privilege then null;
   end;
+
+  begin
+    update public.channel_offers
+    set master_product_id = '20000000-0000-0000-0000-000000000001'
+    where id = '60000000-0000-0000-0000-000000000001';
+    raise exception 'Expected direct Offer mapping to be denied.';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
+    insert into public.aliases (
+      workspace_id, raw_product_name, raw_option_name, source_channel, master_product_id
+    ) values (
+      '10000000-0000-0000-0000-000000000001', 'Direct alias', null, 'NAVER',
+      '20000000-0000-0000-0000-000000000001'
+    );
+    raise exception 'Expected direct Alias insert to be denied.';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
+    update public.audit_issues set status = 'RESOLVED'
+    where id = '70000000-0000-0000-0000-000000000001';
+    raise exception 'Expected direct Issue update to be denied.';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
+    perform public.map_offer(
+      '60000000-0000-0000-0000-000000000003',
+      '20000000-0000-0000-0000-000000000001'
+    );
+    raise exception 'Expected cross-workspace Offer mapping to be denied.';
+  exception when sqlstate 'P0002' then null;
+  end;
+
+  begin
+    perform public.map_offer(
+      '60000000-0000-0000-0000-000000000001',
+      '20000000-0000-0000-0000-000000000002'
+    );
+    raise exception 'Expected cross-workspace Product mapping to be denied.';
+  exception when foreign_key_violation then null;
+  end;
+
+  begin
+    perform public.update_issue_status('70000000-0000-0000-0000-000000000004', 'RESOLVED');
+    raise exception 'Expected cross-workspace Issue update to be denied.';
+  exception when sqlstate 'P0002' then null;
+  end;
+
+  if has_column_privilege('authenticated', 'public.channel_offers', 'master_product_id', 'UPDATE')
+     or has_column_privilege('authenticated', 'public.audit_issues', 'status', 'UPDATE')
+     or has_column_privilege('authenticated', 'public.aliases', 'master_product_id', 'INSERT')
+     or not has_function_privilege('authenticated', 'public.map_offer(uuid, uuid)', 'EXECUTE')
+     or not has_function_privilege('authenticated', 'public.update_issue_status(uuid, text)', 'EXECUTE')
+     or has_schema_privilege('anon', 'seller_audit_private', 'USAGE') then
+    raise exception 'RPC-only privilege boundary is inconsistent.';
+  end if;
 end;
 $$;
 
@@ -480,6 +582,27 @@ begin
       where channel_id = '40000000-0000-0000-0000-000000000001'
       and issue_type = 'MISSING_CHANNEL' and listing_id is null) <> 1 then
     raise exception 'Missing-channel issue cannot be filtered by its target channel.';
+  end if;
+end;
+$$;
+reset role;
+
+-- A different member can write only within their own workspace through RPCs.
+set role authenticated;
+select set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000002', false);
+select public.map_offer(
+  '60000000-0000-0000-0000-000000000003',
+  '20000000-0000-0000-0000-000000000002'
+);
+select public.update_issue_status('70000000-0000-0000-0000-000000000004', 'IN_PROGRESS');
+do $$
+begin
+  if (select master_product_id from public.channel_offers
+      where id = '60000000-0000-0000-0000-000000000003')
+       <> '20000000-0000-0000-0000-000000000002'
+     or (select status from public.audit_issues
+      where id = '70000000-0000-0000-0000-000000000004') <> 'IN_PROGRESS' then
+    raise exception 'Workspace B member RPC write failed.';
   end if;
 end;
 $$;

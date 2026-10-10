@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { createSeedData, getMockCandidates } from '../../src/mock'
+import { asChannelCode } from '../../src/types/domain'
 import { formatDate, formatMoney, getCellStatus, getOfferDetails, getProductComponents, searchProducts } from '../../src/lib/selectors'
 import { createMockRepository, MockRepositoryError, STORAGE_KEY, type StorageLike } from '../../src/services/mockRepository'
 import type { IssueStatus, SellerData } from '../../src/types/domain'
@@ -59,6 +60,32 @@ test('seed is deterministic, referentially coherent, and contains required fixtu
   expect(first.offers.some((offer) => offer.masterProductId === null)).toBe(true)
   expect(first.issues.some((issue) => issue.issueType === 'DUPLICATE')).toBe(true)
   expect(first.issues.some((issue) => issue.issueType === 'MISSING_BOM')).toBe(true)
+})
+
+test('a new workspace channel passes validation and manual mapping records its exact source', async () => {
+  const data = createSeedData()
+  const channel = { ...data.channels[0], id: crypto.randomUUID(), channelCode: asChannelCode('WCONCEPT'), channelName: 'W컨셉' }
+  const listing = { ...data.listings[0], id: crypto.randomUUID(), channelId: channel.id, channelProductId: 'WCONCEPT-001' }
+  const offer = { ...data.offers[0], id: crypto.randomUUID(), listingId: listing.id, masterProductId: null, channelOptionId: 'BASE' }
+  data.channels.push(channel)
+  data.listings.push(listing)
+  data.offers.push(offer)
+  const storage = new MemoryStorage()
+  storage.setItem(STORAGE_KEY, JSON.stringify(data))
+
+  const repository = createMockRepository(storage)
+  expect((await repository.load()).channels).toContainEqual(channel)
+  const mapped = await repository.mapOffer(offer.id, data.products[0].id)
+  expect(mapped.offers.find(item => item.id === offer.id)?.masterProductId).toBe(data.products[0].id)
+  expect(mapped.aliases).toContainEqual(expect.objectContaining({
+    sourceChannel: 'WCONCEPT', rawProductName: listing.productName, masterProductId: data.products[0].id,
+  }))
+
+  const unregisteredSource = createSeedData()
+  unregisteredSource.aliases[0].sourceChannel = asChannelCode('WCONCEPT')
+  storage.setItem(STORAGE_KEY, JSON.stringify(unregisteredSource))
+  await expect(repository.load()).rejects.toThrow('손상')
+  expect(() => asChannelCode('  ')).toThrow('blank')
 })
 
 test('search supports master, SKU, channel id, and channel name paths', () => {
