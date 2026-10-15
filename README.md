@@ -1,6 +1,6 @@
 # SellerAudit V0.1 Foundation
 
-SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준의 판매상품 Master에 연결하고 검수하는 운영 도구입니다. 현재 버전은 실제 SCM 데이터를 받기 전의 Foundation으로, Product·SKU·BOM 관계와 채널 현황을 조회하고 미매칭 Offer와 Audit Issue를 수동 처리할 수 있습니다.
+SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준의 판매상품 Master에 연결하고 검수하는 운영 도구입니다. 현재 버전은 Mock/localStorage 기반 Foundation으로, Product·SKU·BOM 관계와 채널 현황을 조회하고 미매칭 Offer와 Audit Issue를 수동 처리할 수 있습니다.
 
 ## 현재 구현 범위
 
@@ -12,7 +12,7 @@ SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준�
 - 대시보드와 판매채널·워크스페이스 조회 화면 제공
 - 폭 390px의 모바일 메뉴부터 1440px 데스크톱 테이블까지 반응형 지원
 
-도메인 용어와 데이터 관계는 [Domain rules](docs/DOMAIN.md)를 먼저 참고합니다.
+도메인 용어와 데이터 관계는 [Domain rules](docs/DOMAIN.md)를 먼저 참고합니다. 제공된 채널 상품목록 7개의 구조와 Import 제약은 [원본 분석](docs/SCM_SOURCE_ANALYSIS.md)에 기록했습니다. 원본은 저장소에 포함하지 않았고 앱에 적재되지 않았습니다.
 
 ## 실행
 
@@ -73,4 +73,4 @@ E2E는 자체 개발 서버를 `127.0.0.1:4180`에서 실행합니다. DB 검증
 
 ## Stop Line
 
-V0.1은 확장 가능한 Channel 코드, 정확한 문서, CI, RPC 중심 쓰기 경계까지 갖춘 Foundation에서 멈춥니다. 실제 SCM 원본 파일을 분석하기 전에는 Excel/CSV Import, Import History, 채널별 Adapter, 자동매칭, 실제 Audit 탐지, 채널 API 동기화를 구현하지 않습니다.
+V0.1은 확장 가능한 Channel 코드, 정확한 문서, CI, RPC 중심 쓰기 경계까지 갖춘 Foundation에서 멈춥니다. 2026-10-15에 채널별 상품목록 일부를 분석했지만 사방넷 Product·SKU·BOM 원본과 몇몇 채널의 상품/옵션 행은 아직 없습니다. 이 입력과 변환 계약을 확인하기 전에는 Excel/CSV Import, Import History, 채널별 Adapter, 자동매칭, 실제 Audit 탐지, 채널 API 동기화를 구현하지 않습니다.

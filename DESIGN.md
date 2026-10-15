@@ -49,8 +49,8 @@
 - UI → `SellerRepository` → persistence 경계를 유지
 - 현재 persistence는 `localStorage`; SQL은 향후 Supabase 저장소가 따라야 할 계약
 - Channel code는 특정 채널 목록에 고정하지 않음
-- 실제 SCM 원본을 확인하기 전에는 Adapter나 Import schema를 추측하지 않음
+- 소스별 실제 원본을 확인하고 필드 의미를 검증하기 전에는 Adapter나 Import schema를 추측하지 않음
 
 ## Open integration inputs
 
-실제 SCM 파일 형식, 채널별 컬럼 의미, Supabase 프로젝트와 멤버 프로비저닝 방식은 후속 입력입니다. 이 입력이 오기 전에는 현재 Foundation 경계를 확장하지 않습니다.
+채널 상품목록 7개의 1차 분석은 [원본 분석](docs/SCM_SOURCE_ANALYSIS.md)에 있습니다. 사방넷 Product·SKU·BOM 원본, 일부 채널의 실제 상품·옵션 행, 필드 의미와 Supabase 프로젝트·멤버 프로비저닝 방식은 후속 입력입니다. 이 입력을 확인하기 전에는 현재 Foundation 경계를 확장하지 않습니다.

@@ -103,6 +103,6 @@ DB Contract의 재현 가능한 PowerShell 명령은 [DATABASE.md](DATABASE.md)�
 
 ## 다음 단계와 Stop Line
 
-실제 SCM 상품관리 원본 파일을 받으면 파일과 채널별 컬럼 의미를 먼저 분석하고 `RAW → NORMALIZED → MASTER` 변환 계약을 설계합니다. 이후 `src/adapters/` 구현, Import service, 실제 Alias 기반 매칭, Supabase repository, 과거·현재 스냅샷 기반 Audit 탐지 순서로 별도 범위를 정의합니다.
+제공된 채널 상품목록 7개에 대한 1차 구조·품질 분석은 [SCM_SOURCE_ANALYSIS.md](SCM_SOURCE_ANALYSIS.md)에 기록했습니다. 사방넷 Product·SKU·BOM 원본과 옵션별 행이 부족한 채널의 추가 추출물을 확인한 뒤 `RAW → NORMALIZED → MASTER` 변환 계약을 확정합니다. 이후 `src/adapters/` 구현, Import service, 실제 Alias 기반 매칭, Supabase repository, 과거·현재 스냅샷 기반 Audit 탐지 순서로 별도 범위를 정의합니다.
 
-현재 작업은 `Channel 확장성 → 문서 정합성 → GitHub Actions CI → Supabase RPC write boundary → 검증 → STOP`에서 끝납니다. 실제 파일이 오기 전에는 Import, Adapter, Auto Matching, Audit Detection, API Sync를 시작하지 않습니다.
+Foundation 안정화 작업은 `Channel 확장성 → 문서 정합성 → GitHub Actions CI → Supabase RPC write boundary → 검증 → STOP`에서 끝났습니다. 채널 원본 일부가 들어왔지만 Master·옵션 데이터와 의미 확인이 끝나기 전에는 Import, Adapter, Auto Matching, Audit Detection, API Sync를 시작하지 않습니다.
