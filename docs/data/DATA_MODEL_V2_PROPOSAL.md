@@ -31,11 +31,12 @@
 
 ## 4. Entity Decision Matrix
 
-`Key`는 **후보 업무키**를 가리킨다. 별도 표기가 없으면 DB 내부 PK는 UUID, 신규 업무 테이블은 `workspace_id NOT NULL`을 전제로 한다. 모든 NEW 행의 구체적인 원본 열과 기존 Entity로 표현할 때의 문제는 다음 절에 기재한다. 기존 Entity의 물리 컬럼 변경은 추천하지 않아 `EXTEND` 판정은 이번 설계에서 **없다**. 신규 관계와 Import 쓰기 경계는 추후 단계에 구현한다.
+`Key`는 **후보 업무키**를 가리킨다. 별도 표기가 없으면 DB 내부 PK는 UUID, 신규 업무 테이블은 `workspace_id NOT NULL`을 전제로 한다. 모든 NEW 행의 구체적인 원본 열과 기존 Entity로 표현할 때의 문제는 다음 절에 기재한다. 원본 데이터 수용을 위한 기존 업무 Entity의 물리 컬럼 변경은 추천하지 않는다. Prompt 2.1에서 별도로 결정한 `WorkspaceMember`의 Pilot 보안 확장은 §25–32에 기재한다. 신규 관계와 Import 쓰기 경계는 추후 단계에 구현한다.
 
 | Entity / Concept | Decision | Evidence | Why | Key | Relationships | Risks |
 | --- | --- | --- | --- | --- | --- | --- |
-| Workspace, WorkspaceMember | KEEP | 기존 SQL·Auth 계약 | 테넌트/접근 경계 유지 | workspace UUID; `(workspace,user)` | 전체 Entity의 소유자 | 신뢰된 provisioning 필요 |
+| Workspace | KEEP | 기존 SQL·Auth 계약 | 테넌트 루트 유지 | workspace UUID | 전체 Entity의 소유자 | 신뢰된 provisioning 필요 |
+| WorkspaceMember | EXTEND (Pilot) | 기존 SQL·Auth 계약과 §25 | 접근 경계 유지, Role·활성 상태 추가 | `(workspace,user)` | Auth User↔Workspace | 현재 RLS/RPC는 role·status 미검사 |
 | Product | KEEP | Master `단가표!B/E`; 현재 SQL | 승인된 판매상품만 저장 | UUID; `(workspace,sabangnet_code)` unique | BOM, Offer, Price/Cost | 원본 `100526` 승격 차단 |
 | Sku | KEEP | `코드DB!E`, barcode `단품!C` | 검증된 실물 코드만 저장 | UUID; `(workspace,sku_code)` unique | BOM, LogisticsUnit | 코드DB 혼합 코드 유형 |
 | ProductComponent | KEEP | `단가표!F/H`; 현 BOM | 승인 후에만 구성 저장 | UUID; `(workspace,product,sku)` unique | Product·Sku 복합 FK | 세트/중간코드와 수량 불일치 |
@@ -282,18 +283,20 @@ flowchart TD
 
 ## 21. Migration Sequence
 
-1. **V0.2 Import foundation:** Batch/Raw/ValidationIssue와 격리·RLS·승격 계약. 기존 Product unique 유지. 실제 Master dry-run에서 `100526`·BOM 차단 검증.
-2. **V0.2~V0.3 Master promotion and channel:** 승인된 Product/SKU/BOM만 기존 Master에 승격. 채널별 실제 옵션 행과 명시적 mapping이 준비되면 기존 Listing/Offer를 사용.
-3. **V0.3 Logistics/Barcode:** 공식 SKU 범위, 포장단위, 동일 barcode 공유 의미가 확인된 subset만 승격.
-4. **V0.3 Cost/Price:** Price/Cost snapshot과 읽기 모델. Product normal_price 동기화, 세금/통화 기준 검증.
-5. **V0.4 Sales Fact:** 물리 행 보존·재업로드 이중집계 방지·채널/date basis·nullable Product 매칭.
-6. **V0.4/LATER Marketing Fact:** 광고비/attribution 정의가 오기 전에는 13일의 관측 성과만 적재하고 ROAS·Product 귀속을 계산하지 않는다.
+1. **V0.2 Import foundation:** Batch/Raw/ValidationIssue와 격리·RLS·승격 계약. 기존 Product unique 유지. 로컬 Master dry-run에서 `100526`·BOM 차단 검증. 이 단계에서 실사용 데이터를 중앙 Master에 적용하지 않는다.
+2. **Internal Pilot readiness (실사용 전 필수):** 전용 중앙 DB와 Auth, ACTIVE 멤버십/ADMIN·EDITOR·VIEWER, ActivityLog, 모든 RLS/RPC 개정, 백업 복원 및 E2E/DB 통합 검증. Gate 통과 후 직원 초대와 실제 공유 Import를 허용한다.
+3. **V0.2~V0.3 Master promotion and channel:** 승인된 Product/SKU/BOM만 기존 Master에 승격. 채널별 실제 옵션 행과 명시적 mapping이 준비되면 기존 Listing/Offer를 사용.
+4. **V0.3 Logistics/Barcode:** 공식 SKU 범위, 포장단위, 동일 barcode 공유 의미가 확인된 subset만 승격.
+5. **V0.3 Cost/Price:** Price/Cost snapshot과 읽기 모델. Product normal_price 동기화, 세금/통화 기준 검증.
+6. **V0.4 Sales Fact:** 물리 행 보존·재업로드 이중집계 방지·채널/date basis·nullable Product 매칭.
+7. **V0.4/LATER Marketing Fact:** 광고비/attribution 정의가 오기 전에는 13일의 관측 성과만 적재하고 ROAS·Product 귀속을 계산하지 않는다.
 
-각 단계는 독립 Migration과 RLS/tenant/회귀 계약을 통과한 후 다음으로 간다. 이 문서는 어떤 Migration도 생성하지 않는다.
+각 단계는 독립 Migration과 RLS/tenant/회귀 계약을 통과한 후 다음으로 간다. 이 문서는 어떤 Migration도 생성하지 않는다. **실제 직원 접속·공유 데이터 Import 전에는** 중앙 Persistence, Auth, ACTIVE 멤버십/Role 검사, ActivityLog, 백업 복원 및 [Pilot Readiness Gate](../INTERNAL_PILOT_ARCHITECTURE.md#9-pilot-readiness-gate)를 별도 선행 단계로 완료한다. V0.2의 로컬 Import 계약·dry-run 설계는 먼저 진행 가능하지만 실사용 Master 승격은 Gate 이후다. Logistics/Price/Cost, Sales/Marketing 확장은 Pilot 필수 조건이 아니라 검증된 source에 따른 후속 단계다.
 
 | 우선순위 | 범위 | 제품 목표와 중단 조건 |
 | --- | --- | --- |
 | V0.2 | Import provenance/validation, 공식 Product·SKU·BOM dry-run, 확인된 채널 옵션 Mapping | `100526`·미상 SKU·BOM 불일치가 Master에 유입되지 않아야 함 |
+| Pilot Gate | 중앙 DB/Auth/Role/ActivityLog/백업 복원, 전체 활성 멤버십·RLS/RPC 검증 | 실제 직원 접속·공유 데이터 적용 전 필수 |
 | V0.3 | 운영 Audit/Monitoring의 실제 source 연계, 승인된 Barcode/Logistics, 참조 Price/Cost | 포장·가격 종류와 source snapshot이 검증된 subset부터 |
 | V0.4 | SalesFact와 MarketingFact의 근거 있는 채널·날짜 집계 | 미연결 Product와 광고비 공란을 그대로 표현; 임의 attribution 금지 |
 | LATER | PricePolicy 실행, Promotion, Product별 광고·수익성 Intelligence, 주문/정산 ERP 기능 | 실제 거래 ID·광고비·통화/세금·유효기간 등 추가 근거 필요 |
@@ -321,7 +324,7 @@ flowchart TD
 
 ## 24. Recommended Next Step
 
-**GO: Prompt 3 Import Contract 설계만 진행 가능.** 이 V2는 안전한 수용 경계를 제시하지만 실제 승격은 위 미확정 항목을 무시하지 않는다. Prompt 3는 source 종류별 Raw 형식, parser version, batch idempotency, issue severity/승인·정정 이력, 파일 보관·retention, 금액/날짜 parsing 및 트랜잭션·권한 계약을 명시해야 한다. 그 전까지 `100526`과 불완전 BOM을 Master에 넣거나 Sales/광고를 Product에 자동 귀속하지 않는다.
+**GO: 별도 요청이 있을 때 Prompt 3 Import Contract 설계만 진행 가능. HOLD: 실제 사내 Pilot 운영.** 이 V2는 안전한 수용 경계를 제시하지만 실제 승격은 위 미확정 항목과 [Internal Pilot Architecture](../INTERNAL_PILOT_ARCHITECTURE.md)의 보안·운영 Gate를 무시하지 않는다. Prompt 3는 source 종류별 Raw 형식, parser version, batch idempotency, issue severity/승인·정정 이력, 파일 보관·retention, 금액/날짜 parsing 및 트랜잭션·권한 계약을 명시해야 한다. 그 전까지 `100526`과 불완전 BOM을 Master에 넣거나 Sales/광고를 Product에 자동 귀속하지 않는다.
 
 ### 핵심 선택 10개에 대한 명시적 답
 
@@ -336,3 +339,35 @@ flowchart TD
 | Q8 Import issue와 Audit 같은 Domain? | **분리** | 통합 목록은 읽기 모델 필요하나 권한/수명 구분 명확 |
 | Q9 Raw DB 저장? | **물리 행과 셀 원문 저장 추천**; binary 위치는 Prompt 3 | hash만 저장하면 행 재현·검토 불가; 보관 비용 발생 |
 | Q10 Sales 동일값 반복? | **행번호로 모두 보존**; batch 중복 승격만 차단 | 값 기반 dedupe는 정상 복수 주문을 잃을 수 있음 |
+
+## 25. Authentication & Workspace Membership
+
+기존 `workspaces`와 `(workspace_id, user_id)` 멤버십 키는 KEEP한다. Auth User는 신원, WorkspaceMember는 Workspace별 권한이며 한 사용자는 여러 Workspace에 속할 수 있다. Pilot은 Supabase Auth 이메일/비밀번호·관리자 초대, 공개 가입 중지, 세션/재설정/비활성화를 추천한다. 멤버십에는 `status` (`INVITED/ACTIVE/DISABLED`)와 `updated_at`을 EXTEND한다. 모든 데이터/RPC 접근은 DB의 현재 `ACTIVE` 멤버십으로 판정한다. 현재 SQL에는 이 상태가 없고 Auth 연동도 구현되지 않았다. [상세 설계](../INTERNAL_PILOT_ARCHITECTURE.md#2-authentication과-workspace-membership).
+
+## 26. Authorization / Role Model
+
+Pilot Role은 `ADMIN/EDITOR/VIEWER`다. 현재 SQL의 `OWNER/ADMIN/MEMBER` text CHECK는 후속 Migration에서 `OWNER→ADMIN`, `ADMIN→ADMIN`, `MEMBER→VIEWER`로 보수적으로 변환하고 운영자 확인 후 필요한 권한을 부여한다. 세 역할에는 text+CHECK가 가장 단순하다. EDITOR는 Mapping/Audit 쓰기 및 Import Dry-run·검토, ADMIN만 Import 승인·Apply·사용자/Role/Workspace 관리와 ActivityLog 조회, VIEWER는 정제된 업무 조회만 허용한다. 프런트 버튼이 아닌 RLS/GRANT/신뢰된 RPC에서 확인한다. 현재 RPC는 역할을 검사하지 않으므로 아직 Pilot 권한이 아니다. [권한 Matrix와 전환 절차](../INTERNAL_PILOT_ARCHITECTURE.md#3-authorization--role-model).
+
+## 27. Activity Logging
+
+`ActivityLog`는 NEW다. `AuditIssue`(운영 문제), `ImportValidationIssue`(원본 검증 문제)와 분리한다. 성공한 쓰기와 로그는 같은 트랜잭션에서 저장하며, Import 실패는 rollback 후 제한된 실패 이벤트를 별도로 남긴다. 전체 행 snapshot 대신 허용 목록의 변경 필드 이전/이후 값만 저장하고, actor는 검증된 Auth에서 얻는다. ADMIN의 Workspace 범위 읽기만 허용하며 일반 사용자 직접 쓰기는 금지한다. 사용자 비활성화/삭제 후에도 과거 로그는 남긴다. [필드·action 목록과 개인정보 경계](../INTERNAL_PILOT_ARCHITECTURE.md#4-activity-logging).
+
+## 28. Central Persistence
+
+운영 저장소는 전용 managed Supabase PostgreSQL + Auth를 추천한다. 현재 localStorage는 브라우저별 Demo/개발 용도이며 직원 간 공유되지 않는다. Pilot에서는 운영 `SellerRepository`, 서버 측 권한 검사, 쓰기 후 재조회/갱신, 원자적 쓰기와 동시 수정 충돌 처리가 필요하다. Realtime은 필수로 가정하지 않는다. 실제 Supabase 프로젝트 연결이나 코드 변경은 이 설계 범위가 아니다. [저장소 전환 설계](../INTERNAL_PILOT_ARCHITECTURE.md#5-import-권한과-중앙-persistence).
+
+## 29. Internal Pilot Deployment
+
+직원 브라우저 → HTTPS 정적 웹 앱 → Supabase Auth/RLS/RPC → 중앙 DB가 추천 구조다. 회사 상시 켜진 PC는 정적 프런트엔드 호스팅 대안이지만 꺼지면 화면 접속이 중단된다. managed 서비스를 사용하면 Pilot에서 Docker는 필요하지 않다. 특정 OS에 종속시키지 않는다. [단계별 배포·Docker 판단](../INTERNAL_PILOT_ARCHITECTURE.md#6-배포와-docker).
+
+## 30. Backup / Recovery
+
+운영 DB 백업 주기/보존과 원본 파일 별도 암호화 보관, RawImportRow retention, 격리 환경 복원 리허설을 Pilot 전에 확정한다. 관리형 DB 백업은 Storage 객체를 포함하지 않는다. RPO/RTO는 운영 담당자와 결정하며 백업만 있고 복원 검증이 없으면 Gate 미통과다. [상세 원칙](../INTERNAL_PILOT_ARCHITECTURE.md#7-backup--recovery).
+
+## 31. SaaS Migration Path
+
+Development(Mock/localStorage) → Internal Pilot(전용 중앙 DB/Auth/Role/Log) → Internal Production(안정 도메인·백업·모니터링) → SaaS Beta(별도 production 프로젝트·다중 Workspace) → SaaS Production(후속 Billing/사용량 관리) 순서다. Workspace 키/복합 FK/도메인 스키마를 재사용하되 DB·Auth 사용자/초대·원본 파일 이전과 RLS 재검증은 별도 리허설한다. [Lifecycle과 이전 경계](../INTERNAL_PILOT_ARCHITECTURE.md#8-saas-이전과-실행-순서).
+
+## 32. Pilot Readiness Gate
+
+중앙 DB·Auth·ACTIVE 멤버십/세 역할·모든 RLS/RPC Workspace 격리·ActivityLog·Import 승인 안전성·백업 복원·HTTPS/비밀 키 검사·다중 사용자 및 실제 Supabase 통합 E2E/DB Contract가 통과해야 실제 직원 초대와 공유 Import를 시작한다. 현재는 어느 항목도 구현 완료로 간주하지 않는다. [검증 체크리스트](../INTERNAL_PILOT_ARCHITECTURE.md#9-pilot-readiness-gate).
