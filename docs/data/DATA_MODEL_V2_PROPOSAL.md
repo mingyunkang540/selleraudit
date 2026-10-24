@@ -324,7 +324,7 @@ flowchart TD
 
 ## 24. Recommended Next Step
 
-**GO: 별도 요청이 있을 때 Prompt 3 Import Contract 설계만 진행 가능. HOLD: 실제 사내 Pilot 운영.** 이 V2는 안전한 수용 경계를 제시하지만 실제 승격은 위 미확정 항목과 [Internal Pilot Architecture](../INTERNAL_PILOT_ARCHITECTURE.md)의 보안·운영 Gate를 무시하지 않는다. Prompt 3는 source 종류별 Raw 형식, parser version, batch idempotency, issue severity/승인·정정 이력, 파일 보관·retention, 금액/날짜 parsing 및 트랜잭션·권한 계약을 명시해야 한다. 그 전까지 `100526`과 불완전 BOM을 Master에 넣거나 Sales/광고를 Product에 자동 귀속하지 않는다.
+**GO: [Prompt 3 Import Contract v1](IMPORT_CONTRACT.md) 설계 완료. HOLD: 실제 사내 Pilot 운영.** 이 V2는 안전한 수용 경계를 제시하지만 실제 승격은 위 미확정 항목과 [Internal Pilot Architecture](../INTERNAL_PILOT_ARCHITECTURE.md)의 보안·운영 Gate를 무시하지 않는다. Prompt 3는 source 종류별 Raw 형식, parser version, batch idempotency, issue severity/승인·정정 이력, 파일 보관·retention, 금액/날짜 parsing 및 트랜잭션·권한 계약을 문서화했다. 공식 원본 정정과 Pilot Gate 검증 전에는 `100526`과 불완전 BOM을 Master에 넣거나 Sales/광고를 Product에 자동 귀속하지 않는다.
 
 ### 핵심 선택 10개에 대한 명시적 답
 
