@@ -61,6 +61,11 @@ jobs:
         env:
           CI: 'true'
 
+      - name: Run Supabase-mode browser contract tests
+        run: npm run test:e2e:supabase -- --reporter=line 2>&1 | tee .ci-logs/supabase-mode-e2e.log
+        env:
+          CI: 'true'
+
       - name: Install isolated PGlite runtime
         run: |
           npm install \
