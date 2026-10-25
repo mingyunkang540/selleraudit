@@ -11,6 +11,7 @@ const groups: { label: string; items: { path: string; label: string; icon: IconN
   { label: '상품', items: [{ path: '/products', label: '상품 마스터', icon: 'box' }, { path: '/skus', label: 'SKU 관리', icon: 'layers' }] },
   { label: '채널', items: [{ path: '/channels', label: '채널별 상품 현황', icon: 'grid' }] },
   { label: '검수', items: [{ path: '/mapping', label: '매핑 센터', icon: 'link' }, { path: '/audit', label: '검수 센터', icon: 'shield' }] },
+  { label: '데이터', items: [{ path: '/import/master', label: '데이터 가져오기', icon: 'layers' }] },
   { label: '설정', items: [{ path: '/settings/channels', label: '판매채널', icon: 'settings' }, { path: '/settings/workspace', label: '워크스페이스', icon: 'layers' }] },
 ]
 function GlobalSearch({ data, onClose }: { data: SellerData; onClose: () => void }) {

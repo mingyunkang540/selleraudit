@@ -8,6 +8,7 @@ import { SkuMaster } from './features/skus'
 import { ChannelMatrix } from './features/channels'
 import { MappingCenter } from './features/mapping'
 import { AuditCenter } from './features/audit'
+import { MasterImport } from './features/import/MasterImport'
 import { Settings } from './pages/Settings'
 import { useRoute } from './hooks/useRoute'
 import { createMockRepository } from './services/mockRepository'
@@ -51,6 +52,7 @@ export default function App() {
   else if (path === '/channels') page = <ChannelMatrix data={data} />
   else if (path === '/mapping') page = <MappingCenter data={data} onMap={onMap} />
   else if (path === '/audit') page = <AuditCenter key={route} data={data} onUpdateIssue={onUpdateIssue} />
+  else if (path === '/import/master') page = <MasterImport />
   else if (path === '/settings/channels' || path === '/settings/workspace') page = <Settings data={data} section={path.split('/')[2]} />
   else page = <><PageHeader title="페이지를 찾을 수 없습니다" description="주소를 확인하거나 대시보드로 이동해 주세요." /><div className="panel"><EmptyState title="요청한 페이지가 없습니다" action={<a className="button button-primary" href="#/dashboard">대시보드로 이동</a>} /></div></>
   return <Layout data={data} route={route}>{page}</Layout>
