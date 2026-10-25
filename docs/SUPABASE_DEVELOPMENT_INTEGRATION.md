@@ -40,7 +40,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=
 | 인증 | 없음 | 이메일과 비밀번호 |
 | 업무 데이터 | 고정 Seed + `seller-audit:v0.1:data` | Development PostgreSQL |
 | Workspace 선택 | 고정 데모 Workspace | ACTIVE 멤버십 중 선택 |
-| 쓰기 | MockRepository가 `localStorage` 갱신 | 공개 RPC 호출 후 중앙 데이터 재조회 |
+| 쓰기 | MockRepository가 `localStorage` 갱신 | 공개 RPC 호출 후 중앙 데이터 재조회; Master Dry-run 검증 결과 저장 |
 | 설정 누락 | 정상 실행 | 명시적 설정 오류 |
 
 Supabase 모드는 업무 데이터를 `localStorage`에 저장하지 않는다. 선택한 Workspace ID만 사용자별 키 `seller-audit:selected-workspace:<user-id>`에 편의 설정으로 보관한다. 권한은 이 값에서 판단하지 않고 매번 DB의 현재 멤버십과 RLS/RPC에서 검사한다.
@@ -76,7 +76,7 @@ Workspace가 하나면 자동 선택한다. 둘 이상이면 저장된 사용자
 
 ## Role Model
 
-| Role | 조회 | Offer Mapping | Audit 상태 변경 | Master Dry-run |
+| Role | 조회 | Offer Mapping | Audit 상태 변경 | Master Dry-run / 검증 결과 저장 |
 | --- | :---: | :---: | :---: | :---: |
 | `ADMIN` | 허용 | 허용 | 허용 | 허용 |
 | `EDITOR` | 허용 | 허용 | 허용 | 허용 |
@@ -116,13 +116,15 @@ Repository가 각 업무 테이블을 ID 오름차순, 500행 단위로 끝까�
 
 `mapOffer`는 Offer와 Product가 선택 Workspace에 있는지 먼저 확인하고 `map_offer` RPC를 호출한다. `updateIssueStatus`도 Issue 범위와 허용 상태를 확인한 뒤 `update_issue_status` RPC를 호출한다. 성공 후 전체 Workspace 데이터를 다시 읽어 서버 상태를 반영한다. Component에서 `supabase.from(...)` 또는 `supabase.rpc(...)`를 직접 호출하지 않는다.
 
+Master Import persistence는 Core 업무 데이터용 `SellerRepository`에 섞지 않고 별도 `ImportPersistence` contract로 제공한다. `saveMasterDryRun`, `listSavedMasterImports`, `loadSavedImportIssues`, `loadRawImportRow`가 저장 payload 변환과 shared review 조회를 담당한다. 세부 계약은 [Master Import persistence](data/MASTER_IMPORT_PERSISTENCE.md)를 따른다.
+
 ## Supabase Development Setup
 
 1. 운영 프로젝트와 분리된 SellerAudit Development 프로젝트를 준비한다.
 2. Dashboard에서 Project URL과 publishable key를 확인한다. Secret key는 복사하지 않는다.
 3. Authentication의 Email/Password provider를 활성화하고 Public Sign Up을 끈다.
 4. Email confirmation 정책을 정하고 테스트 계정 생성 방식과 일치시키며, Production 정책으로 간주하지 않는다.
-5. 아래 절차로 저장소의 네 Migration을 검토하고 Development 프로젝트에 적용한다.
+5. 아래 절차로 저장소의 다섯 Migration을 검토하고 Development 프로젝트에 적용한다.
 6. Dashboard 또는 별도 신뢰된 관리자 경계에서 테스트 Auth User와 Workspace 멤버십을 만든다.
 7. `.env.local`에 Development URL과 publishable key를 넣고 `VITE_DATA_SOURCE=supabase`로 실행한다.
 
@@ -141,13 +143,14 @@ npx --yes supabase db push --linked
 npx --yes supabase migration list --linked
 ```
 
-적용 전 `--dry-run`에서 네 Migration만 대상인지 검토한다. 적용 후 로컬과 원격 이력에 아래 버전이 모두 있어야 한다.
+적용 전 `--dry-run`에서 다섯 Migration만 대상인지 검토한다. 적용 후 로컬과 원격 이력에 아래 버전이 모두 있어야 한다.
 
 ```text
 20261009015155
 20261010064046
 20261010080630
 20261025090000
+20261025090001
 ```
 
 원격 프로젝트에 `db reset --linked`를 실행하지 않는다. 이 절차의 명령 형식은 Supabase CLI 공식 문서로 확인했지만, SellerAudit Development 프로젝트가 없어 실제 원격 실행은 하지 않았다.
@@ -179,6 +182,9 @@ Dashboard SQL Editor는 높은 권한으로 실행되어 사용자 RLS 인수 �
 | ADMIN이 두 RPC 호출 | ALLOW | NOT RUN |
 | ACTIVE 사용자를 같은 세션에서 DISABLED로 변경한 뒤 재조회 | DENY | NOT RUN |
 | Workspace A 사용자가 Workspace B 행 조회 | 빈 결과 또는 DENY | NOT RUN |
+| ACTIVE ADMIN/EDITOR가 Master Dry-run 저장 | ALLOW, Batch/Raw/Issue/ActivityLog 원자적 생성 | NOT RUN |
+| VIEWER·DISABLED·익명이 Master Dry-run 저장 | DENY | NOT RUN |
+| Workspace A 사용자가 Workspace B로 Dry-run 저장 | DENY | NOT RUN |
 
 RPC 허용 테스트는 안전한 개발용 행만 사용하고 결과를 원복할 수 있어야 한다. 브라우저 UI의 read-only 처리와 별개로 RPC 직접 호출 거부도 확인한다. PGlite는 SQL Contract를 계속 검증하지만 Auth, API gateway와 PostgREST를 포함하지 않으므로 이 원격 절차를 대체하지 않는다.
 
@@ -210,22 +216,22 @@ npm run test:e2e:supabase
 - Public Sign Up, Email confirmation, Site URL과 Redirect URL의 실제 Dashboard 설정은 아직 확인하지 않았다.
 - 비밀번호 재설정은 DEFER 상태다.
 - 직원 초대, Role/Status 변경, Workspace 생성과 마지막 ACTIVE ADMIN 보호 UI/RPC가 없다.
-- ActivityLog 테이블은 있으나 실제 업무 RPC와 원자적으로 기록하는 Writer는 없다.
-- Import Batch/Raw Row/Validation Issue 저장과 Product/SKU/BOM Apply는 없다.
+- ActivityLog 실제 writer는 Master Dry-run 저장의 `IMPORT_VALIDATED` 한 건에만 적용됐다. 다른 업무·Import 이벤트는 아직 없다.
+- Master Dry-run의 Batch/Raw Row/Validation Issue 저장은 구현됐지만 원본 binary, Candidate snapshot, review override와 Product/SKU/BOM Apply는 없다.
 - Role 변경 Realtime 반영은 없으며 새로고침 또는 Workspace 데이터 새로고침이 필요하다.
 - Repository는 서버 응답을 500행 단위로 페이지 처리하지만 현재 Workspace의 Core 데이터 전체를 브라우저 메모리에 구성한다. 화면 단위 조회와 증분 동기화는 후속 검증 대상이다.
 - 실제 사내 데이터 Import, Internal Pilot 배포와 Production 배포를 수행하지 않았다.
 
 ## Current Stop Line
 
-현재 완료 범위는 Mock/Supabase 모드 분리, 안전한 Supabase client 설정, 이메일 로그인·세션 복원·로그아웃, ACTIVE Workspace 선택, ADMIN/EDITOR/VIEWER 인식, Core SellerRepository read, 두 업무 RPC 연결과 VIEWER UI guard까지다.
+현재 완료 범위는 Mock/Supabase 모드 분리, 안전한 Supabase client 설정, 이메일 로그인·세션 복원·로그아웃, ACTIVE Workspace 선택, ADMIN/EDITOR/VIEWER 인식, Core SellerRepository read, 두 업무 RPC, VIEWER UI guard와 Master Dry-run의 Batch/Raw/Issue/`IMPORT_VALIDATED` 중앙 저장·공유 조회까지다.
 
 다음 기능은 여기서 시작하지 않는다.
 
-- ImportBatch, RawImportRow, ImportValidationIssue 저장
-- Excel Storage 업로드
+- Excel Storage 업로드와 server-verified hash
+- Product/SKU/BOM Candidate snapshot과 review override
 - Product, SKU, BOM Apply
-- ActivityLog 실제 기록
+- `IMPORT_VALIDATED` 이외의 ActivityLog writer
 - 직원 초대와 Role 관리 UI
 - 비밀번호 재설정
 - 회사 Production 배포
@@ -237,4 +243,7 @@ npm run test:e2e:supabase
 - [Use Supabase with React](https://supabase.com/docs/guides/getting-started/quickstarts/reactjs)
 - [Password-based Auth](https://supabase.com/docs/guides/auth/passwords)
 - [Row Level Security](https://supabase.com/docs/guides/database/postgres/row-level-security)
+- [Database functions and function security](https://supabase.com/docs/guides/database/functions)
+- [JavaScript RPC](https://supabase.com/docs/reference/javascript/rpc)
+- [Securing the Data API](https://supabase.com/docs/guides/api/securing-your-api)
 - [Supabase CLI database commands](https://supabase.com/docs/reference/cli/supabase-db-push)

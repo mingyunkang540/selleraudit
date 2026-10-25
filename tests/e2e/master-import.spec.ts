@@ -69,6 +69,8 @@ test('Master Excel Dry-run은 문제를 표시하고 기존 Master를 변경하�
   const after = await page.evaluate(key => localStorage.getItem(key), STORAGE_KEY)
   expect(after).toBe(before)
   await expect(page.getByRole('button', { name: /적용|Apply/ })).toHaveCount(0)
+  await expect(page.getByText('Supabase 모드에서만 공유 저장할 수 있습니다.')).toBeVisible()
+  await expect(page.getByRole('button', { name: '검증 결과 저장' })).toHaveCount(0)
   await page.reload()
   await expect(page.getByText('Master Excel 파일을 선택하세요')).toBeVisible()
   await expect(page.getByText('Master 분석 결과')).toHaveCount(0)

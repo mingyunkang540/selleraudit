@@ -16,6 +16,7 @@ import { getDataSourceConfig, getSupabaseClient } from './lib/supabase'
 import { canWrite, loadActiveWorkspaces, type ActiveWorkspace } from './services/auth'
 import { createMockRepository } from './services/mockRepository'
 import { createSupabaseRepository } from './services/supabaseRepository'
+import { createImportPersistence, type ImportPersistence } from './services/importPersistence'
 import type { SellerRepository } from './services/repository'
 import type { IssueStatus, SellerData } from './types/domain'
 
@@ -29,11 +30,12 @@ function ErrorState({ message, retry, loading, hint, onLogout }: { message: stri
   return <div className="app-error"><Icon name="alert" size={36} /><h1>데이터를 불러오지 못했습니다</h1><p role="alert">{message}</p>{hint && <p className="muted">{hint}</p>}{retry && <button className="button button-primary" disabled={loading} onClick={retry}><Icon name="refresh" size={16} />{loading ? '확인 중…' : '다시 시도'}</button>}{onLogout && <button className="button" onClick={onLogout}>로그아웃</button>}</div>
 }
 
-function WorkspaceView({ data, repository, onData, access }: {
+function WorkspaceView({ data, repository, onData, access, importPersistence }: {
   data: SellerData
   repository: SellerRepository
   onData: (data: SellerData) => void
   access?: WorkspaceAccess
+  importPersistence?: ImportPersistence
 }) {
   const route = useRoute()
   const path = route.split('?')[0]
@@ -54,7 +56,7 @@ function WorkspaceView({ data, repository, onData, access }: {
   else if (path === '/channels') page = <ChannelMatrix data={data} />
   else if (path === '/mapping') page = <MappingCenter data={data} onMap={onMap} readOnly={!editable} showDemoRecommendations={!access} />
   else if (path === '/audit') page = <AuditCenter key={route} data={data} onUpdateIssue={onUpdateIssue} readOnly={!editable} />
-  else if (path === '/import/master' && editable) page = <MasterImport />
+  else if (path === '/import/master' && editable) page = <MasterImport persistence={importPersistence} />
   else if (path === '/import/master') page = <><PageHeader title="접근할 수 없습니다" description="이 워크스페이스에서는 데이터 가져오기를 실행할 수 없습니다." /><div className="panel"><EmptyState title="읽기 전용 계정입니다" /></div></>
   else if (path === '/settings/channels' || path === '/settings/workspace') page = <Settings data={data} section={path.split('/')[2]} mode={access?.mode ?? 'mock'} />
   else page = <><PageHeader title="페이지를 찾을 수 없습니다" description="주소를 확인하거나 대시보드로 이동해 주세요." /><div className="panel"><EmptyState title="요청한 페이지가 없습니다" action={<a className="button button-primary" href="#/dashboard">대시보드로 이동</a>} /></div></>
@@ -94,7 +96,7 @@ type RemoteState =
   | { phase: 'signed-out' }
   | { phase: 'no-workspace' }
   | { phase: 'error'; message: string }
-  | { phase: 'ready'; userId: string; email: string | null; workspaces: ActiveWorkspace[]; current: ActiveWorkspace; repository: SellerRepository; data: SellerData }
+  | { phase: 'ready'; userId: string; email: string | null; workspaces: ActiveWorkspace[]; current: ActiveWorkspace; repository: SellerRepository; importPersistence: ImportPersistence; data: SellerData }
 
 function SupabaseApp() {
   const supabase = getSupabaseClient()
@@ -126,10 +128,11 @@ function SupabaseApp() {
       try { savedId = window.localStorage.getItem(selectedWorkspaceKey(user.id)) } catch { /* Optional preference only. */ }
       const current = workspaces.find(item => item.id === preferredWorkspaceId) ?? workspaces.find(item => item.id === savedId) ?? workspaces[0]
       const repository = createSupabaseRepository({ supabase, workspaceId: current.id })
+      const importPersistence = createImportPersistence({ supabase, workspaceId: current.id })
       const data = await repository.load()
       if (currentRequest !== requestId.current) return
       try { window.localStorage.setItem(selectedWorkspaceKey(user.id), current.id) } catch { /* Optional preference only. */ }
-      setState({ phase: 'ready', userId: user.id, email: user.email ?? null, workspaces, current, repository, data })
+      setState({ phase: 'ready', userId: user.id, email: user.email ?? null, workspaces, current, repository, importPersistence, data })
     } catch (cause) {
       if (currentRequest === requestId.current) setState({ phase: 'error', message: cause instanceof Error ? cause.message : '데이터를 불러오지 못했습니다.' })
     }
@@ -176,7 +179,8 @@ function SupabaseApp() {
     onWorkspaceChange: (id) => void bootstrap(id), onLogout: () => void logout(), onRefresh: () => void bootstrap(active.current.id),
   }
   return <WorkspaceView key={`${active.userId}:${active.current.id}`} data={active.data} repository={active.repository}
-    onData={(next) => setState(current => current.phase === 'ready' && current.repository === active.repository ? { ...current, data: next } : current)} access={access} />
+    onData={(next) => setState(current => current.phase === 'ready' && current.repository === active.repository ? { ...current, data: next } : current)}
+    access={access} importPersistence={active.importPersistence} />
 }
 
 function readConfiguration(): { mode: 'mock' | 'supabase'; error: null } | { mode: null; error: string } {

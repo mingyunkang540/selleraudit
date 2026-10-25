@@ -1,6 +1,6 @@
 # SellerAudit Import Contract v1 (Prompt 3, 설계안)
 
-**상태: 문서 설계 전용.** 이 문서는 아직 존재하지 않는 Import 테이블·서비스의 후속 구현 계약이다. 현재 React 앱은 MockRepository/localStorage만 쓰고, 기존 PostgreSQL Migration은 연결된 Supabase 프로젝트에 적용되지 않았다. Parser, Migration, UI, Storage, RPC, 실제 업로드/승격은 이 작업에서 만들지 않는다. 기준은 [Data Model V2](DATA_MODEL_V2_PROPOSAL.md), [Data Dictionary](DATA_DICTIONARY.md), [Internal Pilot Architecture](../INTERNAL_PILOT_ARCHITECTURE.md) 및 각 [원본 분석](MASTER_SOURCE_ANALYSIS.md)이다. 오류 코드는 [별도 카탈로그](IMPORT_ERROR_CODES.md)에 정의한다.
+**상태: 부분 구현 + 후속 계약.** Master Workbook의 브라우저 Parser·Dry-run과, Supabase 모드에서 Batch·Raw·Validation Issue·`IMPORT_VALIDATED` ActivityLog를 원자적으로 저장하는 shared review 범위가 로컬에 구현됐다. Product/SKU/BOM Candidate snapshot, 원본 binary Storage, server-verified hash, review override, approval과 Apply는 아직 이 문서의 후속 계약이다. SellerAudit용 원격 Development 프로젝트가 없어 Migration·Auth·RLS·RPC acceptance는 HOLD다. 기준은 [Data Model V2](DATA_MODEL_V2_PROPOSAL.md), [Data Dictionary](DATA_DICTIONARY.md), [Internal Pilot Architecture](../INTERNAL_PILOT_ARCHITECTURE.md), [Master Import persistence](MASTER_IMPORT_PERSISTENCE.md) 및 각 [원본 분석](MASTER_SOURCE_ANALYSIS.md)이다. 오류 코드는 [별도 카탈로그](IMPORT_ERROR_CODES.md)에 정의한다.
 
 ## 1. Purpose
 
@@ -8,7 +8,7 @@
 
 ## 2. Scope
 
-V0.2 첫 구현 후보는 **Master Workbook의 Product·SKU·BOM Dry-run과 검증 결과**까지다. 이 문서는 Barcode, Channel, Sales, Marketing의 후속 수용 원칙과 Apply 계약도 설계하지만, 해당 Adapter/승격이 구현됐다는 뜻이 아니다. 실제 직원과 실제 공유 데이터에는 Prompt 2.1의 Pilot Readiness Gate가 선행한다. 업로드 파일명이나 샘플 시드로 미확인 컬럼·상태·FK를 확정하지 않는다.
+V0.2의 현재 구현은 **Master Workbook의 Product·SKU·BOM Dry-run과 검증 결과 중앙 저장·공유 조회**까지다. 중앙 저장은 Candidate 전체가 아니라 Raw evidence, Issue, Batch count와 제한된 ActivityLog만 보존한다. 이 문서는 Barcode, Channel, Sales, Marketing의 후속 수용 원칙과 Apply 계약도 설계하지만, 해당 Adapter/승격이 구현됐다는 뜻이 아니다. 실제 직원과 실제 공유 데이터에는 Prompt 2.1의 Pilot Readiness Gate가 선행한다. 업로드 파일명이나 샘플 시드로 미확인 컬럼·상태·FK를 확정하지 않는다.
 
 ## 3. Import Principles
 
@@ -38,6 +38,8 @@ V0.2 첫 구현 후보는 **Master Workbook의 Product·SKU·BOM Dry-run과 검�
 
 `VALIDATING`에는 구조 식별·파싱·정규화·검증을 묶어 상태 폭발을 막는다. 미리보기 생성은 metadata/Raw/Issue/후보 revision을 기록할 수 있지만 **Product/SKU/BOM/Listing/Offer/Fact와 운영 Alias는 쓰지 않는다**. 이를 UI의 임시 계산과 혼동하지 않는다.
 
+현재 5C 구현은 위 전체 pipeline 중 브라우저 `IDENTIFY → RAW CAPTURE → NORMALIZE → VALIDATE` 결과의 일부를 shared review 기록으로 저장한다. 한 `persist_master_import_dry_run` RPC가 Batch, Raw, Issue와 ActivityLog를 같은 transaction에서 생성한다. 원본 객체 업로드, Candidate snapshot, `REVIEW`, diff, `READY_TO_APPLY`, `APPLY` 이후 단계는 실행하지 않는다.
+
 ## 5. ImportBatch Lifecycle
 
 | 상태 | 의미 | 허용되는 다음 상태 |
@@ -54,9 +56,13 @@ V0.2 첫 구현 후보는 **Master Workbook의 Product·SKU·BOM Dry-run과 검�
 
 상태 전이는 trusted service가 검사한다. `REVIEW_REQUIRED→READY_TO_APPLY`는 우회 전이가 아니다. 실제 구현은 새 validation revision과 최신 diff를 기록한 뒤에만 전이한다. 이미 Fact가 commit된 batch를 `CANCELLED`로 바꾸지 않는다. `PARTIALLY_APPLIED`를 끝내지 못하면 운영자에게 그대로 노출하고 별도 보정 batch를 연결하는 상태는 후속 계약으로 둔다. 상태·count·ActivityLog는 같은 성공 트랜잭션에서 갱신한다. Master Apply 실패처럼 원래 트랜잭션 전체가 rollback되면 별도 신뢰된 트랜잭션에서 `FAILED`와 제한된 실패 이벤트를 기록한다.
 
+5C에서 저장하는 Master Dry-run Batch는 차단 이슈가 0건이어도 항상 `REVIEW_REQUIRED`, `validation_revision=1`이다. 원본 binary의 서버 검증, 공식 review/approval과 Apply가 없으므로 `READY_TO_APPLY`로 자동 전환하지 않는다. `source_type=MASTER_WORKBOOK`, `source_scope_key=WORKBOOK`, `parser_version=master-v1.0.0`은 DB trusted boundary에서 고정한다.
+
 **최소 batch metadata:** `id`, `workspace_id`, `source_type`(V2의 `source_kind` 후보 명칭을 이 계약에서 통일), nullable 표시용 `source_channel`, non-null canonical `source_scope_key`, 표시용 `source_filename`, 원본 바이트 `source_file_hash`(SHA-256), `parser_version`, `status`, 원본 객체 참조·version·byte size, `created_by/created_at`, nullable `validated_at/applied_at`, `validation_revision`, `row_count`, `valid_count`, `warning_count`, `error_count`, `deferred_count`, `applied_count`, `failed_count`, `remaining_count`. `reviewed_at/by`는 승인 결정에 연결한다. `FAILED`는 허용 목록의 BatchFailureCode와 correlation ID만 보유한다. Count는 동일 revision 기준이고 행/후보 단위를 혼용하지 않으며 화면에 분모를 표시한다.
 
 `row_count`는 실제 입력으로 판별한 물리 데이터 행 수이며 header·빈 서식 행은 제외한다. `valid/warning/error/deferred_count`는 **후보 단위**의 상호 배타적 최종 판정 수로, 후보 수를 분모로 표시한다. 한 물리 행이 여러 후보를 만들 수 있으므로 합계가 `row_count`와 같을 필요는 없다. `applied_count`는 실제 적용된 target 단위 수이며 `UNCHANGED`와 의도적 `DEFERRED`를 포함하지 않는다. `failed_count`는 Apply 시도 중 실패해 아직 commit되지 않은 **적용 가능 target 단위** 수다. `remaining_count`는 아직 시도하지 않았거나 재시도가 필요한 적용 가능 target 단위 수이며 `failed_count`를 포함한다. 성공적으로 재시도하면 두 값이 감소한다. `APPLIED`이면 `failed_count=remaining_count=0`, `PARTIALLY_APPLIED`이면 `remaining_count>0`이다. 검증 `error_count`와는 다르다. Preview/결과에는 행 수와 후보·target 수를 각각 명시한다.
+
+5C persistence에서 `row_count`는 실제 저장된 `RawImportRow` 수다. `product_candidate_count`, `sku_candidate_count`, `bom_candidate_count`와 `valid/warning/error/deferred_count`는 브라우저 Preview의 후보 판정 수다. Candidate row 자체는 저장하지 않는다. `applied_count`, `failed_count`, `remaining_count`는 모두 0으로 유지한다.
 
 ## 6. Raw Preservation
 
@@ -148,7 +154,7 @@ grain은 `source_surface(sheet) + reporting_date + media_type`의 **값 있는 �
 
 ## 17. Permissions
 
-[Pilot Role Matrix](../INTERNAL_PILOT_ARCHITECTURE.md#3-authorization--role-model)를 따른다. VIEWER는 정제된 batch 요약/상태만 읽고 업로드·Raw·상세 issue·원본 파일·Dry-run·Apply는 거부한다. EDITOR는 업로드, Raw/issue 조회, correction, 검증, Dry-run/검토를 수행하되 승인·Apply는 불가하다. ADMIN은 같은 작업과 충돌 승인·Apply/안전 재시도를 수행한다. Workspace 삭제/임의 rollback은 일반 UI 권한이 아니다. 모든 권한은 ACTIVE 멤버십을 DB/trusted backend에서 재확인한다. Prompt 5A SQL은 멤버십 역할·상태 읽기 정책과 기존 Mapping/Audit RPC 권한을 검사한다. Import 업로드·correction·승인·Apply의 신뢰된 쓰기 경계는 아직 구현되지 않았으므로 실제 Import는 열지 않는다.
+[Pilot Role Matrix](../INTERNAL_PILOT_ARCHITECTURE.md#3-authorization--role-model)를 따른다. VIEWER는 정제된 batch 요약/상태만 읽고 업로드·Raw·상세 issue·원본 파일·Dry-run·Apply는 거부한다. EDITOR는 브라우저 Dry-run 결과 저장과 Raw/issue 공유 조회를 수행할 수 있지만 correction, 승인·Apply는 할 수 없다. ADMIN도 현재는 같은 shared review 범위까지만 사용한다. Workspace 삭제/임의 rollback은 일반 UI 권한이 아니다. 모든 권한은 ACTIVE 멤버십을 DB/trusted boundary에서 재확인한다. `persist_master_import_dry_run`은 ACTIVE ADMIN/EDITOR만 허용하고 VIEWER, INVITED, DISABLED, anonymous와 교차 Workspace 호출을 거부한다. Import correction·승인·Apply의 신뢰된 쓰기 경계는 아직 구현되지 않았다.
 
 ## 18. Workspace Isolation
 
@@ -156,13 +162,13 @@ Batch, Raw, Issue, 후보, preview, 적용 대상, 원본 객체 metadata와 Act
 
 ## 19. Activity Logging
 
-`IMPORT_CREATED`, `IMPORT_VALIDATED`, `IMPORT_REVIEWED`, `IMPORT_APPLIED`, `IMPORT_FAILED`, `IMPORT_CONFLICT_RESOLVED`를 [ActivityLog 설계](../INTERNAL_PILOT_ARCHITECTURE.md#4-activity-logging)에 연결한다. Batch/Issue는 업무 상태, ActivityLog는 actor 행위 이력으로 분리한다. 성공한 상태/승격·ActivityLog는 같은 트랜잭션에 기록한다. Fact chunk마다 correlation ID와 chunk 범위를 연결하고 완료 요약 이벤트는 한 번만 남긴다. 실패 트랜잭션은 rollback 후 신뢰된 경계에서 제한된 `IMPORT_FAILED`를 별도 기록한다. actor는 검증된 Auth에서 얻으며 원본 셀·이메일·token을 log payload에 복제하지 않는다. 비활성/삭제 후에도 허용된 기간 동안 과거 actor_ref를 보존한다.
+`IMPORT_CREATED`, `IMPORT_VALIDATED`, `IMPORT_REVIEWED`, `IMPORT_APPLIED`, `IMPORT_FAILED`, `IMPORT_CONFLICT_RESOLVED`를 [ActivityLog 설계](../INTERNAL_PILOT_ARCHITECTURE.md#4-activity-logging)에 연결한다. 현재 구현된 이벤트는 Master Dry-run 저장 성공 시 Batch·Raw·Issue와 같은 transaction에 한 번 생성되는 `IMPORT_VALIDATED`다. `actor_user_id`는 `auth.uid()`, `actor_ref`는 DB가 Workspace membership마다 생성한 opaque UUID를 사용한다. 클라이언트가 actor를 보내지 않으며 이메일·이름을 reference로 쓰지 않는다. `changed_fields`에는 상태, parser version과 count 요약만 남기고 hash, 원본 셀·이메일·token을 복제하지 않는다. 나머지 이벤트와 Fact chunk logging은 후속 계약이다.
 
 ## 20. File Storage / Retention
 
-**선택: Option B.** 원본 Excel/CSV binary는 접근 제한된 암호화 **private Object Storage**, DB는 file metadata/SHA-256/immutable Raw 행을 보유한다. Option A의 원본 binary 보관만으로는 행별 provenance·검증 이력 조회 계약이 완성되지 않고, Option C처럼 binary를 버리면 parser 재현·수식/서식·행외 metadata 검증이 불가능하다. 신뢰된 서버가 **저장된 byte stream**에서 SHA-256을 계산·검증하고 객체 version/byte size/고유 key를 Batch에 묶는다. 같은 key overwrite를 허용하지 않는다. Apply 직전 객체 version·size·hash가 Batch metadata와 같은지 재검증한다(객체 version을 제공하지 않는 Storage라면 byte stream을 다시 해시). 클라이언트 제공 hash/filename은 권한 또는 멱등성의 근거가 아니다. Original/Raw/Applied Fact/ActivityLog는 서로 다른 보존 정책 대상이다. 파일럿에서는 임의 자동 삭제를 기본으로 하지 않고 접근·백업·복구 담당자 및 retention을 운영 전에 정한다. SaaS의 기간·삭제/export 비용은 별도 정책으로 확정한다. DB 백업은 Storage 객체를 포함하지 않으므로 별도 백업과 복원 리허설이 필요하다.
+**후속 목표는 Option B다.** 원본 Excel/CSV binary는 접근 제한된 암호화 **private Object Storage**, DB는 file metadata/SHA-256/immutable Raw 행을 보유한다. 현재 5C는 원본 binary를 DB나 Storage에 저장하지 않으며 브라우저가 계산한 **client-observed SHA-256**만 Batch에 기록한다. 서버가 byte stream을 다시 hash하지 않으므로 이 값을 server-verified hash 또는 Apply 신뢰 근거로 취급하지 않는다. Option A의 원본 binary 보관만으로는 행별 provenance·검증 이력 조회 계약이 완성되지 않고, Option C처럼 binary를 버리면 parser 재현·수식/서식·행외 metadata 검증이 불가능하다. 후속 Storage 단계에서는 신뢰된 서버가 **저장된 byte stream**에서 SHA-256을 계산·검증하고 객체 version/byte size/고유 key를 Batch에 묶는다. 같은 key overwrite를 허용하지 않는다. Apply 직전 객체 version·size·hash가 Batch metadata와 같은지 재검증한다(객체 version을 제공하지 않는 Storage라면 byte stream을 다시 해시). 클라이언트 제공 hash/filename은 권한 또는 멱등성의 근거가 아니다. Original/Raw/Applied Fact/ActivityLog는 서로 다른 보존 정책 대상이다. 파일럿에서는 임의 자동 삭제를 기본으로 하지 않고 접근·백업·복구 담당자 및 retention을 운영 전에 정한다. SaaS의 기간·삭제/export 비용은 별도 정책으로 확정한다. DB 백업은 Storage 객체를 포함하지 않으므로 별도 백업과 복원 리허설이 필요하다.
 
-Object Storage와 DB는 하나의 ACID 트랜잭션이 아니다. 객체 업로드·hash 검증 후 Batch/Raw metadata를 commit하고, DB 실패로 참조되지 않은 객체는 제한된 관리자 정리 절차에서 확인해 제거한다. 반대로 DB에 참조만 있고 객체가 없으면 batch를 완료하지 않고 재업로드/복구한다. 백업 복원에서도 metadata와 실제 객체의 hash를 대조한다.
+후속 Storage 구현에서 Object Storage와 DB는 하나의 ACID 트랜잭션이 아니다. 객체 업로드·hash 검증 후 Batch/Raw metadata를 commit하고, DB 실패로 참조되지 않은 객체는 제한된 관리자 정리 절차에서 확인해 제거한다. 반대로 DB에 참조만 있고 객체가 없으면 batch를 완료하지 않고 재업로드/복구한다. 백업 복원에서도 metadata와 실제 객체의 hash를 대조한다.
 
 원본에 미래 개인정보가 들어올 수 있으므로 수집 필드 최소화, Raw 접근 제한/암호화, 감사 가능성과 삭제 요청의 균형을 검토한다. 운영 로그·일반 UI 응답은 민감 필드를 마스킹하되 immutable Raw를 조용히 변형하고 완전한 원본이라고 주장하지 않는다. 민감 원본의 보관/삭제는 별도 정책을 확정한다. 앱 로그/ActivityLog에 전체 Raw 행, 파일 binary, Auth token/password/service key를 출력하지 않는다. private 객체 다운로드는 권한을 재검증한 인증 경로나 짧은 만료의 URL만 사용한다. 브라우저에 `service_role`을 넣지 않는다. [Supabase Storage access control](https://supabase.com/docs/guides/storage/security/access-control), [private bucket](https://supabase.com/docs/guides/storage/buckets/fundamentals), [DB backups](https://supabase.com/docs/guides/platform/backups)를 구현 시 다시 확인한다.
 
@@ -269,7 +275,7 @@ interface SourceAdapter<T> {
 
 ## 27. Recommended V0.2 Scope
 
-**단일 추천안:** 원본 파일은 private Storage, metadata/Raw/후보·Issue는 중앙 DB, source-specific Adapter는 파일을 후보로만 변환, 공통 ImportService는 validation/review/dry-run/apply를 조정한다. Master는 batch 원자적, Fact는 source-row unique를 가진 chunk 원자적 정책이다. 우선 구현은 `MASTER_WORKBOOK`의 공식 Product·Sku·BOM **Dry-run** 및 오류 카탈로그 확인까지로 제한한다. 적용 가능한 공식 코드/구성 증거가 부족한 `100526`·`AL24`·수량 불일치는 차단 결과로 보여준다. 이후 Auth/Role/ActivityLog/중앙 저장소와 Pilot Gate가 구현·검증되기 전 실제 공유 데이터 Apply를 허용하지 않는다.
+**현재 단계:** `MASTER_WORKBOOK`의 Product·SKU·BOM Dry-run과 오류 카탈로그, Batch/Raw/Issue/`IMPORT_VALIDATED` 중앙 저장과 ADMIN/EDITOR shared review까지 구현됐다. 적용 가능한 공식 코드/구성 증거가 부족한 `100526`·`AL24`·수량 불일치는 계속 차단 결과로 보여준다. **다음 추천안:** 원본 파일을 private Storage에 보존해 server-verified hash를 만들고, Candidate snapshot·review/approval·Master diff 계약을 별도 설계한 뒤 Apply를 검토한다. 원격 Auth/RLS/RPC acceptance와 Pilot Gate를 통과하기 전 실제 공유 데이터 Apply를 허용하지 않는다.
 
 ## 28. Deferred Items
 

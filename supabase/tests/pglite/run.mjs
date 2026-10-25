@@ -53,9 +53,10 @@ try {
   }
   await database.exec(await readFile(resolve(directory, 'foundation_contract.sql'), 'utf8'))
   await database.exec(await readFile(resolve(directory, 'import_foundation_contract.sql'), 'utf8'))
+  await database.exec(await readFile(resolve(directory, 'master_import_persistence_contract.sql'), 'utf8'))
   const tables = await database.query("select count(*)::int as count from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'")
   if (tables.rows[0].count !== 14) throw new Error('Expected all 14 Foundation tables')
-  log('Database contract PASS: 14 tables; role backfill, RLS, import constraints, tenant isolation, atomic mapping and issue transitions.')
+  log('Database contract PASS: 14 tables; role backfill, RLS, trusted atomic import persistence, tenant isolation, mapping and issue transitions.')
 } finally {
   await database.close()
 }

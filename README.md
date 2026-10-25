@@ -1,6 +1,6 @@
 # SellerAudit Foundation + Supabase Development Integration
 
-SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준의 판매상품 Master에 연결하고 검수하는 운영 도구입니다. 기본 Mock/localStorage 모드와, 별도 Development Supabase 프로젝트에 연결할 수 있는 Auth·중앙 Repository 모드를 지원합니다. Master Excel Dry-run은 두 모드 모두 브라우저에서만 실행하며 DB에 저장하지 않습니다.
+SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준의 판매상품 Master에 연결하고 검수하는 운영 도구입니다. 기본 Mock/localStorage 모드와, 별도 Development Supabase 프로젝트에 연결할 수 있는 Auth·중앙 Repository 모드를 지원합니다. Master Excel Dry-run은 브라우저에서 실행하며, Supabase 모드의 ADMIN과 EDITOR는 Raw·검증 이슈·요약을 중앙 Import 기록으로 저장해 공유 검토할 수 있습니다. Product·SKU·BOM Apply는 아직 없습니다.
 
 ## 현재 구현 범위
 
@@ -12,6 +12,7 @@ SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준�
 - Supabase 모드에서 이메일/비밀번호 로그인, 세션 복원, 로그아웃과 ACTIVE Workspace 선택
 - ADMIN/EDITOR/VIEWER 역할 표시 및 VIEWER의 Mapping·Audit 변경과 Master Dry-run 실행 차단
 - Supabase에서 Product·SKU·BOM·Channel·Listing·Offer·Alias·Audit Issue를 읽고 기존 두 업무 RPC로 변경
+- Supabase ADMIN/EDITOR가 Master Dry-run 결과를 원자적 RPC로 저장하고 같은 Workspace에서 Batch·Issue·Raw 근거를 공유 검토
 - 대시보드와 판매채널·워크스페이스 조회 화면 제공
 - Master `.xlsx` 파일을 브라우저에서 분석하고 후보·검증 이슈를 미리보기로 확인. DB Apply는 없음
 - 폭 390px의 모바일 메뉴부터 1440px 데스크톱 테이블까지 반응형 지원
@@ -50,7 +51,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=<development-publishable-key>
 | 채널 상품 매트릭스 | `#/channels` | Product별 채널 등록 상태 비교와 상세 Drawer |
 | 매핑 센터 | `#/mapping` | 미매칭 Offer를 Product에 수동 연결하고 Alias 저장 |
 | 감사 센터 | `#/audit` | Issue 검색·필터와 처리 상태 변경 |
-| Master Excel 분석 | `#/import/master` | 원본 파일 선택, Product·SKU·BOM 후보와 차단 이슈 Dry-run |
+| Master Excel 분석 | `#/import/master` | 원본 파일 선택, Product·SKU·BOM 후보와 차단 이슈 Dry-run, Supabase 검증 결과 저장·공유 검토 |
 | 판매채널 설정 | `#/settings/channels` | 현재 워크스페이스의 채널 현황 조회 |
 | 워크스페이스 설정 | `#/settings/workspace` | 현재 데이터 저장 방식과 작업 환경 조회 |
 
@@ -62,9 +63,9 @@ UI는 `SellerRepository` 인터페이스에 의존합니다. Mock 모드의 수�
 
 Supabase 모드는 Auth Session의 ACTIVE 멤버십으로 Workspace를 선택하고 중앙 PostgreSQL에서 업무 데이터를 읽습니다. 수동 매핑과 Issue 상태 변경은 `map_offer`, `update_issue_status` RPC를 호출한 뒤 데이터를 다시 읽습니다. 업무 데이터는 `localStorage`에 저장하지 않으며 사용자별 마지막 Workspace ID만 편의 설정으로 보관합니다. URL 또는 publishable key가 없으면 설정 오류를 표시하고 Mock 모드로 자동 전환하지 않습니다.
 
-Master Excel 분석 결과는 `SellerRepository`와 분리된 화면 메모리에만 보관됩니다. 원본 파일과 후보는 `localStorage`나 DB에 저장되지 않습니다. 지원 형식과 한계는 [Master Import Dry-run](docs/data/MASTER_IMPORT_DRY_RUN.md)을 참고하세요.
+Master Excel 분석은 `SellerRepository`와 분리된 Import 전용 서비스에서 처리합니다. 원본 `.xlsx` binary와 Product/SKU/BOM Candidate row는 브라우저 세션에만 남습니다. Supabase 모드의 ADMIN/EDITOR가 `검증 결과 저장`을 실행하면 Batch 요약, Raw Row, Validation Issue와 `IMPORT_VALIDATED` ActivityLog가 한 RPC로 중앙 DB에 저장됩니다. 저장 상태는 차단 이슈가 없어도 `REVIEW_REQUIRED`이며 Master에는 반영되지 않습니다. 지원 형식과 한계는 [Master Import Dry-run](docs/data/MASTER_IMPORT_DRY_RUN.md), 저장 계약은 [Master Import persistence](docs/data/MASTER_IMPORT_PERSISTENCE.md)를 참고하세요.
 
-SQL 스키마와 RPC 계약은 `supabase/`에 있습니다. 로컬 Migration에는 ACTIVE Workspace 역할, Import 이력·ActivityLog 테이블과 RLS 계약이 포함됩니다. Supabase client, Auth와 중앙 Repository 구현은 준비됐지만 SellerAudit용 원격 Development 프로젝트와 자격증명이 없어 Migration 적용 및 Auth·Data API·RLS·RPC 인수 검증은 아직 수행하지 않았습니다. [DB Foundation 상세](docs/data/IMPORT_DB_FOUNDATION.md)와 [Supabase 개발 통합](docs/SUPABASE_DEVELOPMENT_INTEGRATION.md)을 참고하세요.
+SQL 스키마와 RPC 계약은 `supabase/`에 있습니다. 로컬 Migration에는 ACTIVE Workspace 역할, Import 이력·ActivityLog 테이블, RLS와 `persist_master_import_dry_run`이 포함됩니다. Supabase client, Auth, 중앙 Repository와 로컬 Import persistence 구현은 준비됐지만 SellerAudit용 원격 Development 프로젝트와 자격증명이 없어 Migration 적용 및 Auth·Data API·RLS·RPC 인수 검증은 아직 수행하지 않았습니다. [DB Foundation 상세](docs/data/IMPORT_DB_FOUNDATION.md)와 [Supabase 개발 통합](docs/SUPABASE_DEVELOPMENT_INTEGRATION.md)을 참고하세요.
 
 ## 검증 명령
 
@@ -93,4 +94,4 @@ npm.cmd uninstall --prefix $sellerAuditQa --no-save --package-lock=false '@elect
 
 ## Stop Line
 
-로컬 Supabase 통합 구현은 완료됐지만 원격 Development 프로젝트의 Migration, Auth, RLS와 RPC acceptance는 HOLD입니다. Master 원본의 Product·SKU·BOM은 Dry-run까지만 분석합니다. Import Batch/Raw 저장, Apply, Excel Storage 업로드, ActivityLog 실제 기록, 직원 초대·Role 관리 UI와 회사 Production 배포는 구현하지 않습니다.
+로컬 Supabase 통합과 Master Dry-run 검증 결과의 중앙 저장·공유 조회 구현은 완료됐지만 원격 Development 프로젝트의 Migration, Auth, RLS와 RPC acceptance는 HOLD입니다. 원본 `.xlsx` binary, Candidate snapshot, review override와 Product·SKU·BOM Apply는 저장하지 않습니다. Excel Storage 업로드, 직원 초대·Role 관리 UI와 회사 Production 배포도 구현하지 않습니다.
