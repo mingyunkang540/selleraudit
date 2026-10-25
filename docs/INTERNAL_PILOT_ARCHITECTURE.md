@@ -1,10 +1,10 @@
 # SellerAudit Internal Pilot Architecture (Prompt 2.1, 설계안)
 
-이 문서는 [Data Model V2 Proposal](data/DATA_MODEL_V2_PROPOSAL.md)의 업무 Entity와 RAW → NORMALIZED → MASTER 경계를 유지하면서 땡스소윤 내부 파일럿의 인증·권한·운영 경계를 정의한다. **현재 구현 상태가 아니다.** 현재 앱은 MockRepository/localStorage만 사용하고, 저장소의 SQL은 어떤 Supabase 프로젝트에도 적용되지 않았다. 이 문서는 코드, Migration 또는 배포를 수행하지 않는다.
+이 문서는 [Data Model V2 Proposal](data/DATA_MODEL_V2_PROPOSAL.md)의 업무 Entity와 RAW → NORMALIZED → MASTER 경계를 유지하면서 땡스소윤 내부 파일럿의 인증·권한·운영 경계를 정의한다. Workspace Role/Status와 Import·ActivityLog **DB Foundation만** 후속 [Migration](data/IMPORT_DB_FOUNDATION.md)으로 구현되었다. 현재 앱은 MockRepository/localStorage만 사용하고, 저장소의 SQL은 어떤 Supabase 프로젝트에도 적용되지 않았다. Auth·실사용 Import·배포 계획은 여전히 설계다.
 
 ## 1. 현재 상태와 목표 구조
 
-현재 SQL의 `workspaces`와 `(workspace_id, user_id)` PK를 가진 `workspace_members`는 재사용한다. 다만 현재 `role` CHECK는 `OWNER/ADMIN/MEMBER`이고 `status`가 없다. 기존 RLS와 `map_offer`·`update_issue_status` RPC는 **멤버십 존재만** 확인한다. 따라서 VIEWER의 쓰기와 비활성 사용자의 읽기를 차단하는 파일럿 권한은 아직 존재하지 않는다. 운영 데이터를 넣거나 직원을 초대하기 전에 후속 Migration과 통합 검증이 필요하다.
+`workspaces`와 `(workspace_id, user_id)` PK를 가진 `workspace_members`는 재사용한다. Prompt 5A의 새 Migration은 `ADMIN/EDITOR/VIEWER`, `INVITED/ACTIVE/DISABLED`, ACTIVE 기반 RLS와 기존 두 업무 RPC의 역할 검사를 로컬 SQL에 추가한다. **실제 Supabase/Auth 통합은 아직 없다.** 운영 데이터를 넣거나 직원을 초대하기 전에 중앙 연결·통합 검증과 아래 Pilot Gate가 필요하다.
 
 ```text
 직원 브라우저 (HTTPS)
@@ -20,7 +20,7 @@
 
 **추천: Supabase Auth 이메일/비밀번호 + 관리자 초대/프로비저닝.** 공개 Sign Up을 끄고, 신뢰된 관리자 경계에서 사용자를 초대한다. 직원은 로그인, 로그아웃, 세션 갱신, 비밀번호 재설정을 이용한다. 비밀번호와 재설정 토큰은 앱 DB나 ActivityLog에 저장하지 않는다. 초기 계정/Workspace 생성은 운영자가 신뢰된 경계에서 수행하고, 이후 초대·역할 변경은 ADMIN용 신뢰된 API/RPC가 처리한다. Auth 관리용 비밀 키는 브라우저에 전달하지 않는다. Google/Kakao/Naver 로그인, MFA, SSO는 파일럿 뒤로 미룬다.
 
-Auth User는 **신원**, WorkspaceMember는 **Workspace별 권한**이다. 한 Auth User의 두 Workspace 멤버십은 서로 독립적인 역할과 상태를 가질 수 있다. 권장 최소 확장은 `workspace_members.status` (`INVITED`, `ACTIVE`, `DISABLED`; 기본값은 기존 데이터 전환 후 `ACTIVE`)와 `updated_at`이다. `created_at`은 유지한다. 초대 시각·가입 시각·비활성 시각은 ActivityLog의 타임스탬프로 추적하고, 실제 운영에서 별도 검색/정책 수요가 확인되면 컬럼을 추가한다. 초대된 Auth 사용자 ID가 확인된 뒤 `INVITED` 멤버십을 만들고, 이메일 확인과 관리자 승인 절차가 끝난 후 신뢰된 경계에서 `ACTIVE`로 바꾼다. `INVITED`와 `DISABLED`는 업무 데이터 읽기/쓰기가 모두 거부된다. 이미 존재하는 Auth 사용자의 다른 Workspace 초대도 공개 가입이 아닌 관리자 작업이다.
+Auth User는 **신원**, WorkspaceMember는 **Workspace별 권한**이다. 한 Auth User의 두 Workspace 멤버십은 서로 독립적인 역할과 상태를 가질 수 있다. 새 `workspace_members.status`는 `INVITED`, `ACTIVE`, `DISABLED`이며 기존 행만 `ACTIVE`로 변환하고 신규 행은 `INVITED`가 기본값이다. `updated_at`은 역할·상태 변경 시 갱신된다. `created_at`은 유지한다. 초대 시각·가입 시각·비활성 시각은 향후 ActivityLog의 타임스탬프로 추적하고, 실제 운영에서 별도 검색/정책 수요가 확인되면 컬럼을 추가한다. 초대된 Auth 사용자 ID가 확인된 뒤 `INVITED` 멤버십을 만들고, 이메일 확인과 관리자 승인 절차가 끝난 후 신뢰된 경계에서 `ACTIVE`로 바꾼다. `INVITED`와 `DISABLED`는 업무 데이터 읽기/쓰기가 모두 거부된다. 이미 존재하는 Auth 사용자의 다른 Workspace 초대도 공개 가입이 아닌 관리자 작업이다.
 
 퇴사 또는 Workspace 접근 해제는 우선 멤버십을 `DISABLED`로 바꾼다. 계정 전체 차단이 필요하면 Auth 관리자 차단도 병행하지만, **기존 액세스 토큰의 만료 전 유효성에 기대지 않고** 모든 RLS/업무 RPC에서 DB의 현재 멤버십을 재확인해야 한다. 로그아웃은 세션 정리이며 권한 회수의 유일한 수단이 아니다. 마지막 ACTIVE ADMIN을 비활성화·강등·삭제하는 작업은 원자적으로 거부한다. 동시 역할 변경은 해당 멤버십/Workspace를 잠그거나 동등한 직렬화 절차로 처리하고 변경 직전 ADMIN 수를 다시 확인한다.
 
@@ -45,9 +45,9 @@ Auth User는 **신원**, WorkspaceMember는 **Workspace별 권한**이다. 한 A
 
 ¹ 원본 셀/파일과 내부 검증 상세에는 민감한 데이터가 있을 수 있다. VIEWER에게는 정제된 배치 상태/요약만 노출하고 RawImportRow·원본 파일 접근은 ADMIN/EDITOR로 제한한다. Workspace 삭제는 파일럿 UI에서 누구에게도 열지 않고 별도 운영 절차로 보류한다.
 
-`workspace_members.role`은 현재와 같은 **text + CHECK**를 추천한다. 세 고정 값에 충분하고, enum은 값 변경/제거가 번거로우며 별도 roles table은 아직 필요 없는 동적 RBAC을 만든다. 후속 Migration은 기존 `OWNER → ADMIN`, `ADMIN → ADMIN`, `MEMBER → VIEWER`를 **보수적 초깃값**으로 변환한다. OWNER/ADMIN 중복 또는 MEMBER의 실제 편집 필요성은 운영자가 확인해 조정한다. 기존 `MEMBER`의 편집 권한을 무단 승계하지 않는다. CHECK 교체와 데이터 변환은 한 트랜잭션으로 수행하고, 기존 데이터·권한 테스트를 먼저 확인한다. 이후 기본 Role은 `VIEWER`로 두고 초대한 관리자가 명시적으로 높인다.
+`workspace_members.role`은 **text + CHECK**다. 세 고정 값에 충분하고, enum은 값 변경/제거가 번거로우며 별도 roles table은 아직 필요 없는 동적 RBAC을 만든다. Prompt 5A Migration은 기존 `OWNER → ADMIN`, `ADMIN → ADMIN`, `MEMBER → VIEWER`를 **보수적 초깃값**으로 변환한다. OWNER/ADMIN 중복 또는 MEMBER의 실제 편집 필요성은 운영자가 확인해 조정한다. 기존 `MEMBER`의 편집 권한을 무단 승계하지 않는다. CHECK 교체와 데이터 변환은 한 트랜잭션으로 수행한다. 이후 기본 Role은 `VIEWER`로 두고 초대한 관리자가 명시적으로 높인다.
 
-후속 구현은 모든 현재/신규 업무 테이블에 `workspace_id`를 적용하고, `ACTIVE` 멤버십 없는 SELECT/INSERT/UPDATE/DELETE를 거부해야 한다. `workspace_members` 자체 읽기도 자기 멤버십 또는 ADMIN 관리 범위만 허용한다. 기존 `map_offer`와 `update_issue_status`는 대상 행을 잠그고 `ACTIVE + ADMIN/EDITOR`를 DB에서 검사하도록 개정한다. 사용자 관리와 Import 승인 역시 같은 방식으로 `ACTIVE + ADMIN`을 확인한다. `SECURITY DEFINER`는 RLS를 우회할 수 있으므로 함수 내부의 멤버십·role·대상 Workspace 검증과 최소 GRANT가 필수다. 권한 회수 직후 기존 세션으로 조회/RPC를 시도하는 거부 테스트, A/B Workspace 교차 접근 테스트, VIEWER 직접 RPC 호출 테스트가 필요하다.
+새 Migration은 모든 현재/신규 업무 테이블의 `workspace_id`와 `ACTIVE` 멤버십 기반 조회 경계를 적용하고, `workspace_members` 자체 읽기는 자기 ACTIVE 멤버십만 허용한다. 기존 `map_offer`와 `update_issue_status`도 대상 행을 잠그고 `ACTIVE + ADMIN/EDITOR`를 DB에서 검사하도록 개정했다. 사용자 관리와 Import 승인은 후속 신뢰된 경계에서 `ACTIVE + ADMIN`을 확인해야 한다. `SECURITY DEFINER`는 RLS를 우회할 수 있으므로 함수 내부의 멤버십·role·대상 Workspace 검증과 최소 GRANT가 필수다. 권한 회수 직후 기존 세션으로 조회/RPC를 시도하는 거부 테스트, A/B Workspace 교차 접근 테스트, VIEWER 직접 RPC 호출 테스트를 로컬 DB 계약에 포함했다.
 
 ## 4. Activity Logging
 

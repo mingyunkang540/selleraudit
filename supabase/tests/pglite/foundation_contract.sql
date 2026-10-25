@@ -14,9 +14,11 @@ insert into public.workspaces (id, name) values
   ('10000000-0000-0000-0000-000000000001', 'Workspace 1'),
   ('10000000-0000-0000-0000-000000000002', 'Workspace 2');
 
-insert into public.workspace_members (workspace_id, user_id, role) values
-  ('10000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'OWNER'),
-  ('10000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000002', 'OWNER');
+-- These fixtures exercise the post-migration permission model. The legacy
+-- OWNER/ADMIN/MEMBER backfill is seeded before the new migration by run.mjs.
+insert into public.workspace_members (workspace_id, user_id, role, status) values
+  ('10000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', 'ADMIN', 'ACTIVE'),
+  ('10000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000002', 'ADMIN', 'ACTIVE');
 
 insert into public.products (
   id,

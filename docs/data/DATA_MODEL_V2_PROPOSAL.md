@@ -342,11 +342,11 @@ flowchart TD
 
 ## 25. Authentication & Workspace Membership
 
-기존 `workspaces`와 `(workspace_id, user_id)` 멤버십 키는 KEEP한다. Auth User는 신원, WorkspaceMember는 Workspace별 권한이며 한 사용자는 여러 Workspace에 속할 수 있다. Pilot은 Supabase Auth 이메일/비밀번호·관리자 초대, 공개 가입 중지, 세션/재설정/비활성화를 추천한다. 멤버십에는 `status` (`INVITED/ACTIVE/DISABLED`)와 `updated_at`을 EXTEND한다. 모든 데이터/RPC 접근은 DB의 현재 `ACTIVE` 멤버십으로 판정한다. 현재 SQL에는 이 상태가 없고 Auth 연동도 구현되지 않았다. [상세 설계](../INTERNAL_PILOT_ARCHITECTURE.md#2-authentication과-workspace-membership).
+기존 `workspaces`와 `(workspace_id, user_id)` 멤버십 키는 KEEP한다. Auth User는 신원, WorkspaceMember는 Workspace별 권한이며 한 사용자는 여러 Workspace에 속할 수 있다. Pilot은 Supabase Auth 이메일/비밀번호·관리자 초대, 공개 가입 중지, 세션/재설정/비활성화를 추천한다. Prompt 5A에서 멤버십 `status` (`INVITED/ACTIVE/DISABLED`)와 `updated_at`, 현재 `ACTIVE` 멤버십 검사 SQL을 구현했다. 실제 Auth 연동은 아직 구현되지 않았다. [상세 설계](../INTERNAL_PILOT_ARCHITECTURE.md#2-authentication과-workspace-membership).
 
 ## 26. Authorization / Role Model
 
-Pilot Role은 `ADMIN/EDITOR/VIEWER`다. 현재 SQL의 `OWNER/ADMIN/MEMBER` text CHECK는 후속 Migration에서 `OWNER→ADMIN`, `ADMIN→ADMIN`, `MEMBER→VIEWER`로 보수적으로 변환하고 운영자 확인 후 필요한 권한을 부여한다. 세 역할에는 text+CHECK가 가장 단순하다. EDITOR는 Mapping/Audit 쓰기 및 Import Dry-run·검토, ADMIN만 Import 승인·Apply·사용자/Role/Workspace 관리와 ActivityLog 조회, VIEWER는 정제된 업무 조회만 허용한다. 프런트 버튼이 아닌 RLS/GRANT/신뢰된 RPC에서 확인한다. 현재 RPC는 역할을 검사하지 않으므로 아직 Pilot 권한이 아니다. [권한 Matrix와 전환 절차](../INTERNAL_PILOT_ARCHITECTURE.md#3-authorization--role-model).
+Pilot Role은 `ADMIN/EDITOR/VIEWER`다. Prompt 5A Migration에서 기존 `OWNER→ADMIN`, `ADMIN→ADMIN`, `MEMBER→VIEWER`를 보수적으로 변환했다. 세 역할에는 text+CHECK를 사용한다. EDITOR는 기존 Mapping/Audit RPC 쓰기와 Import Raw/Issue 조회, ADMIN은 그 권한과 ActivityLog 조회, VIEWER는 정제된 업무 조회만 허용한다. 현재 DB의 RLS/GRANT/RPC는 이 범위를 검사한다. Import Dry-run 공유·승인·Apply와 사용자/Role/Workspace 관리의 신뢰된 쓰기 경계는 아직 없으며 Pilot 권한 완료로 간주하지 않는다. [권한 Matrix와 전환 절차](../INTERNAL_PILOT_ARCHITECTURE.md#3-authorization--role-model).
 
 ## 27. Activity Logging
 
@@ -370,4 +370,4 @@ Development(Mock/localStorage) → Internal Pilot(전용 중앙 DB/Auth/Role/Log
 
 ## 32. Pilot Readiness Gate
 
-중앙 DB·Auth·ACTIVE 멤버십/세 역할·모든 RLS/RPC Workspace 격리·ActivityLog·Import 승인 안전성·백업 복원·HTTPS/비밀 키 검사·다중 사용자 및 실제 Supabase 통합 E2E/DB Contract가 통과해야 실제 직원 초대와 공유 Import를 시작한다. 현재는 어느 항목도 구현 완료로 간주하지 않는다. [검증 체크리스트](../INTERNAL_PILOT_ARCHITECTURE.md#9-pilot-readiness-gate).
+중앙 DB·Auth·ACTIVE 멤버십/세 역할·모든 RLS/RPC Workspace 격리·ActivityLog·Import 승인 안전성·백업 복원·HTTPS/비밀 키 검사·다중 사용자 및 실제 Supabase 통합 E2E/DB Contract가 통과해야 실제 직원 초대와 공유 Import를 시작한다. Prompt 5A는 로컬 DB 스키마·일부 RLS/RPC 계약만 검증한다. 실제 Supabase 연동과 나머지 운영 항목은 아직 완료되지 않았다. [검증 체크리스트](../INTERNAL_PILOT_ARCHITECTURE.md#9-pilot-readiness-gate).

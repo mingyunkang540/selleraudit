@@ -148,7 +148,7 @@ grain은 `source_surface(sheet) + reporting_date + media_type`의 **값 있는 �
 
 ## 17. Permissions
 
-[Pilot Role Matrix](../INTERNAL_PILOT_ARCHITECTURE.md#3-authorization--role-model)를 따른다. VIEWER는 정제된 batch 요약/상태만 읽고 업로드·Raw·상세 issue·원본 파일·Dry-run·Apply는 거부한다. EDITOR는 업로드, Raw/issue 조회, correction, 검증, Dry-run/검토를 수행하되 승인·Apply는 불가하다. ADMIN은 같은 작업과 충돌 승인·Apply/안전 재시도를 수행한다. Workspace 삭제/임의 rollback은 일반 UI 권한이 아니다. 모든 권한은 ACTIVE 멤버십을 DB/trusted backend에서 재확인한다. 현재 SQL은 역할·status를 아직 검사하지 않으므로 Pilot 준비 구현 전에는 실제 Import를 열지 않는다.
+[Pilot Role Matrix](../INTERNAL_PILOT_ARCHITECTURE.md#3-authorization--role-model)를 따른다. VIEWER는 정제된 batch 요약/상태만 읽고 업로드·Raw·상세 issue·원본 파일·Dry-run·Apply는 거부한다. EDITOR는 업로드, Raw/issue 조회, correction, 검증, Dry-run/검토를 수행하되 승인·Apply는 불가하다. ADMIN은 같은 작업과 충돌 승인·Apply/안전 재시도를 수행한다. Workspace 삭제/임의 rollback은 일반 UI 권한이 아니다. 모든 권한은 ACTIVE 멤버십을 DB/trusted backend에서 재확인한다. Prompt 5A SQL은 멤버십 역할·상태 읽기 정책과 기존 Mapping/Audit RPC 권한을 검사한다. Import 업로드·correction·승인·Apply의 신뢰된 쓰기 경계는 아직 구현되지 않았으므로 실제 Import는 열지 않는다.
 
 ## 18. Workspace Isolation
 

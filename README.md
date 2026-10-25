@@ -49,7 +49,7 @@ UI는 `SellerRepository` 인터페이스에 의존하며 현재 구현체는 브
 
 Master Excel 분석 결과는 `SellerRepository`와 분리된 화면 메모리에만 보관됩니다. 원본 파일과 후보는 `localStorage`나 DB에 저장되지 않습니다. 지원 형식과 한계는 [Master Import Dry-run](docs/data/MASTER_IMPORT_DRY_RUN.md)을 참고하세요.
 
-SQL 스키마와 RPC 계약은 `supabase/`에 있지만 앱은 아직 Supabase 프로젝트, Auth 또는 Data API에 연결되지 않았습니다. 실제 Supabase 저장소 구현은 후속 범위입니다.
+SQL 스키마와 RPC 계약은 `supabase/`에 있습니다. 로컬 Migration에는 ACTIVE Workspace 역할, Import 이력·ActivityLog 테이블과 RLS 계약이 포함되지만 앱은 아직 Supabase 프로젝트, Auth 또는 Data API에 연결되지 않았습니다. 실제 Supabase 저장소 구현은 후속 범위입니다. [DB Foundation 상세](docs/data/IMPORT_DB_FOUNDATION.md)를 참고하세요.
 
 ## 검증 명령
 

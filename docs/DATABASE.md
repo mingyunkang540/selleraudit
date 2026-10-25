@@ -1,12 +1,13 @@
 # SellerAudit database foundation
 
-SellerAudit V0.1의 데이터베이스 계약은 세 개의 순차 마이그레이션으로 정의합니다.
+SellerAudit의 로컬 데이터베이스 계약은 네 개의 순차 마이그레이션으로 정의합니다.
 
 | Migration | 책임 |
 | --- | --- |
 | `20261009015155_seller_audit_foundation.sql` | 10개 Foundation 테이블, 관계, RLS와 최초 RPC |
 | `20261010064046_audit_channel_context.sql` | Listing이 없는 채널 누락 Issue의 대상 Channel 보존 |
 | `20261010080630_harden_write_boundaries.sql` | 직접 DML 차단과 RPC 중심 write boundary |
+| `20261025090000_import_foundation_and_roles.sql` | ACTIVE 멤버십·ADMIN/EDITOR/VIEWER, Import 이력과 ActivityLog, RLS/RPC 강화 |
 
 이 SQL은 로컬 계약으로 작성되어 있으며 연결된 Supabase 프로젝트에는 적용하지 않았습니다. 현재 React 앱도 Supabase client, Auth 또는 Data API를 사용하지 않습니다.
 
@@ -24,6 +25,10 @@ SellerAudit V0.1의 데이터베이스 계약은 세 개의 순차 마이그레�
 | `channel_offers` | 실제 판매 옵션 또는 판매 단위 | Workspace 복합 FK, 가격 음수 금지, 옵션 없는 상품은 `BASE` |
 | `aliases` | 사람이 확정한 매칭 사전 | 상품명·옵션명·Channel 조합 고유, 원문 보존 |
 | `audit_issues` | 감사 Issue | Offer와 Listing 관계, 명시한 Channel과 Listing 일치 |
+| `import_batches` | Import 시도와 검증·적용 상태의 메타데이터 | Workspace 범위, Source/상태·hash·count CHECK |
+| `raw_import_rows` | 불변 원본 행 근거 | Batch·Sheet·행 번호 고유, 동일 Workspace FK, JSON array |
+| `import_validation_issues` | Master 적용 전 검증 문제 | Batch/Raw 동일 Workspace·Batch FK, Issue 상태·심각도 |
+| `activity_logs` | 사람의 중요 변경 이력 | ADMIN 범위 조회, 변경 필드 JSON object, opaque actor_ref |
 
 모든 자식 관계는 `workspace_id`를 포함한 복합 외래 키를 사용합니다. 다른 Workspace의 Product, SKU, Channel, Listing, Offer를 연결하는 쓰기는 DB 제약으로 거부됩니다. Product와 SKU는 BOM으로 연결하며 Listing과 Offer는 상품 페이지와 구매 가능한 판매 단위를 구분합니다. 전체 규칙은 [DOMAIN.md](DOMAIN.md)에 있습니다.
 
@@ -38,7 +43,10 @@ Channel code는 DB에서도 `text`입니다. 현재 시드의 여섯 코드에 �
 `public`의 모든 테이블에 RLS가 활성화되어 있습니다.
 
 - `anon`은 테이블 접근과 RPC 실행 권한이 없습니다.
-- `authenticated`는 `auth.uid()`와 `workspace_members`가 허용하는 Workspace의 데이터만 읽을 수 있습니다.
+- `authenticated`는 `auth.uid()`의 현재 `ACTIVE` Workspace 멤버십이 허용하는 데이터만 읽을 수 있습니다. 신규 멤버십은 `VIEWER/INVITED`로 시작합니다.
+- 기존 `OWNER/ADMIN/MEMBER`는 새 마이그레이션에서 `ADMIN/ADMIN/VIEWER`로 변환되고 기존 멤버십만 `ACTIVE`로 backfill됩니다.
+- ACTIVE `ADMIN/EDITOR`만 기존 업무 RPC를 실행할 수 있습니다. ACTIVE `VIEWER`는 일반 업무 데이터와 Import Batch 메타데이터를 읽지만 Raw·상세 검증 Issue·ActivityLog는 읽지 못합니다. `INVITED/DISABLED`는 업무 데이터와 RPC에 접근하지 못합니다.
+- 네 개 신규 테이블은 직접 authenticated INSERT/UPDATE/DELETE가 금지됩니다. 읽기는 역할별 RLS와 SELECT grant를 함께 적용합니다.
 - `workspace_members`의 Insert, Update, Delete는 브라우저 사용자에게 허용하지 않습니다. 가입과 최초 Workspace 생성은 `service_role` 또는 관리자 SQL 같은 신뢰된 경계에서 수행합니다.
 - `authenticated`는 `channel_offers.master_product_id`, `aliases`, `audit_issues.status/resolved_at`을 직접 쓰지 못합니다.
 - 업무 쓰기는 공개 RPC `map_offer`, `update_issue_status`로만 진입합니다.
@@ -56,7 +64,7 @@ public.update_issue_status(p_issue_id uuid, p_status text)
 
 `public` 함수는 빈 `search_path`를 사용하는 얇은 `SECURITY INVOKER` wrapper입니다. 실제 쓰기는 노출 스키마 밖의 `seller_audit_private` 함수가 수행합니다. 내부 함수는 `SECURITY DEFINER`, 빈 `search_path`, 완전 수식된 객체명을 사용합니다.
 
-두 내부 함수는 먼저 `auth.uid()`가 존재하는지 확인하고 대상 행의 `workspace_id`와 `workspace_members`를 직접 join합니다. 따라서 함수 owner의 권한으로 실행되더라도 호출자가 속하지 않은 Workspace의 행을 처리하지 않습니다. `seller_audit_private`는 Data API 노출 스키마가 아니며 `anon`에는 사용·실행 권한이 없습니다. `authenticated`에는 공개 wrapper가 내부 구현을 호출하는 데 필요한 schema usage와 함수 execute만 부여하며 테이블 직접 DML 권한은 부여하지 않습니다.
+두 내부 함수는 먼저 `auth.uid()`가 존재하는지 확인하고 대상 행의 `workspace_id`와 `workspace_members`를 직접 join하여 현재 `ACTIVE ADMIN/EDITOR`인지 확인합니다. 따라서 함수 owner의 권한으로 실행되더라도 다른 Workspace, VIEWER, INVITED, DISABLED 사용자의 변경을 처리하지 않습니다. `seller_audit_private`는 Data API 노출 스키마가 아니며 `anon`에는 사용·실행 권한이 없습니다. `authenticated`에는 공개 wrapper가 내부 구현을 호출하는 데 필요한 schema usage와 함수 execute만 부여하며 테이블 직접 DML 권한은 부여하지 않습니다.
 
 ### `map_offer`
 
@@ -127,11 +135,11 @@ node supabase/tests/pglite/run.mjs (Join-Path $sellerAuditQa 'node_modules/@elec
 npm.cmd uninstall --prefix $sellerAuditQa --no-save --package-lock=false '@electric-sql/pglite'
 ```
 
-GitHub Actions도 동일한 pin과 runner를 사용합니다. Contract는 마이그레이션 적용, 10개 테이블, 익명 접근 거부, Workspace A/B 격리, 교차 Workspace Product 연결 거부, 직접 DML 차단, 두 RPC 성공 경로, 매핑 원자성, Issue 상태 전이를 확인해야 합니다.
+GitHub Actions도 동일한 pin과 runner를 사용합니다. Contract는 마이그레이션 적용, 14개 테이블, 기존 Role/Status 변환, 익명·비활성 접근 거부, Workspace A/B 격리, 신규 Import FK/고유·hash 제약, 역할별 읽기·RPC 권한, 직접 DML 차단, 매핑 원자성과 Issue 상태 전이를 확인해야 합니다. [Import DB Foundation](data/IMPORT_DB_FOUNDATION.md)에 신규 테이블과 보존 경계를 정리했습니다.
 
 PGlite는 PostgreSQL 엔진을 검증하지만 Supabase Auth, PostgREST와 API gateway를 포함하지 않습니다. 실제 Supabase 프로젝트를 연결한 뒤에는 별도 개발 프로젝트에서 pgTAP/RLS, Data API와 Auth 통합을 다시 검증해야 합니다.
 
-현재 PGlite Contract에서는 세 마이그레이션과 10개 테이블 생성, 직접 DML 차단, Workspace A/B의 자기 RPC 성공, 다른 Workspace Offer·Product·Issue 접근 거부, Alias 실패 시 전체 rollback과 Issue 상태 전이가 통과했습니다. 실제 Supabase 배포와 Auth/PostgREST 통합은 아직 검증하지 않았습니다.
+로컬 PGlite Contract의 최신 통과 여부는 runner 결과를 기준으로 판단합니다. 실제 Supabase 배포와 Auth/PostgREST 통합은 아직 검증하지 않았습니다.
 
 ## 라이브 적용 전 절차
 
