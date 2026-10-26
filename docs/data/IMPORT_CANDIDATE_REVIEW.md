@@ -136,7 +136,7 @@ review_import_validation_issue(uuid, integer, integer, text, text) returns void
 
 ## Legacy Batch Behavior
 
-5C에서 저장된 기존 Batch에는 Candidate row가 없다. 이 Batch를 삭제하거나 Raw에서 가짜 Candidate를 backfill하지 않는다. UI는 Batch와 기존 Issue/Raw evidence를 계속 보여주고 Candidate 영역에는 snapshot이 없는 이전 저장 기록이라는 안내를 표시한다. legacy Batch는 review RPC의 대상이 아니다.
+5C에서 저장된 기존 Batch에는 Candidate row가 없다. 이 Batch를 삭제하거나 Raw에서 가짜 Candidate를 backfill하지 않는다. UI는 Batch와 기존 Issue/Raw evidence를 계속 보여주고 Candidate 영역에는 snapshot이 없는 이전 저장 기록이라는 안내를 표시한다. 5E에서 생성된 Candidate가 있더라도 SourceFile 서버 검증 이전의 `CLIENT_OBSERVED` Batch는 조회만 가능하며 새 Candidate/Issue review mutation은 거부한다.
 
 ## Preserved Data Cases
 
@@ -158,11 +158,11 @@ Human Review
 ≠ Apply
 ```
 
-## No Apply and No Storage
+## No Apply and Source Trust
 
 5E는 `products`, `skus`, `product_components`, `channels`, `channel_listings`, `channel_offers`, `aliases`, `audit_issues`를 쓰지 않는다. `READY_TO_APPLY`, 승인, diff, merge 또는 Apply API도 제공하지 않는다.
 
-원본 `.xlsx` binary를 Supabase Storage에 업로드하지 않고 서버에서 SHA-256을 다시 계산하지 않는다. `source_file_hash`는 계속 브라우저가 관측한 `client-observed SHA-256`이며 server-verified source로 표현하지 않는다.
+5F부터 Supabase 모드의 새 Batch는 private Storage 원본의 서버 SHA-256 검증을 요구한다. `source_file_id`, server hash, parser version, validation revision이 Review의 근거다. 원본이 바뀌면 새 SourceFile과 Batch, parser가 바뀌면 새 Batch가 필요하다. 향후 revalidation 결과에 이전 Review를 자동 이월하지 않는다. validation revision 2 생성은 아직 구현하지 않았다. [원본 보관·검증](IMPORT_SOURCE_STORAGE.md)을 참고한다.
 
 ## Remote Status
 
@@ -174,4 +174,4 @@ DB CONTRACT = PASS
 LIVE AUTH / BROWSER = PASS
 ```
 
-다음 단계는 Apply가 아니다. Private Source File Storage, server-verified SHA-256과 revalidation/review consistency를 별도 단계로 검토한다.
+5F는 Private Source File Storage와 server-verified SHA-256을 추가했다. 다음 단계는 Apply가 아니다.

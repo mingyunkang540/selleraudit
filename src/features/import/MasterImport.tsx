@@ -1,11 +1,11 @@
 import { useMemo, useRef, useState } from 'react'
 import { DataTable, Drawer, EmptyState, PageHeader, SearchInput, StatusBadge } from '../../components/ui'
-import type { ImportPersistence } from '../../services/importPersistence'
+import { ImportPersistenceError, type ImportPersistence } from '../../services/importPersistence'
 import type { MasterImportPreview } from '../../types/import'
 import { SavedImportReview } from './SavedImportReview'
 import './master-import.css'
 
-type ProcessingState = 'IDLE' | 'READING' | 'VALIDATING' | 'READY' | 'ERROR'
+type ProcessingState = 'IDLE' | 'READING' | 'REGISTERING' | 'UPLOADING' | 'VERIFYING' | 'VALIDATING' | 'READY' | 'ERROR'
 type CandidateTab = 'products' | 'skus' | 'bomComponents'
 type ImportIssue = MasterImportPreview['issues'][number]
 
@@ -54,6 +54,7 @@ export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: Im
   const [message, setMessage] = useState<string | null>(null)
   const [preview, setPreview] = useState<MasterImportPreview | null>(null)
   const [hash, setHash] = useState<string | null>(null)
+  const [sourceFileId, setSourceFileId] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [issueFilter, setIssueFilter] = useState<'ALL' | 'ERROR' | 'WARNING'>('ALL')
   const [issuePage, setIssuePage] = useState(1)
@@ -66,51 +67,59 @@ export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: Im
 
   const chooseFile = (next: File | null) => {
     requestId.current += 1
-    setFile(next); setPreview(null); setHash(null); setMessage(null); setState('IDLE')
+    setFile(next); setPreview(null); setHash(null); setSourceFileId(null); setMessage(null); setState('IDLE')
     setQuery(''); setIssuePage(1); setCandidatePage(1); setSelectedIssue(null)
     setSaveState('IDLE'); setSavedBatchId(null)
     if (next && !/\.xlsx$/i.test(next.name)) { setState('ERROR'); setMessage('.xlsx 형식의 Master Excel 파일을 선택해 주세요.') }
   }
 
   const analyze = async () => {
-    if (!file || state === 'READING' || state === 'VALIDATING') return
+    if (!file || ['READING', 'REGISTERING', 'UPLOADING', 'VERIFYING', 'VALIDATING'].includes(state)) return
     if (!/\.xlsx$/i.test(file.name)) { setState('ERROR'); setMessage('.xlsx 형식의 Master Excel 파일을 선택해 주세요.'); return }
     const currentRequest = ++requestId.current
-    setState('READING'); setMessage(null); setPreview(null); setHash(null); setSaveState('IDLE'); setSavedBatchId(null)
+    setState('READING'); setMessage(null); setPreview(null); setHash(null); setSourceFileId(null); setSaveState('IDLE'); setSavedBatchId(null)
     try {
       const bytes = await file.arrayBuffer()
       if (currentRequest !== requestId.current) return
+      let observedHash: string | null = null
+      if (globalThis.crypto?.subtle) {
+        const digest = await crypto.subtle.digest('SHA-256', bytes)
+        observedHash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+        if (currentRequest !== requestId.current) return
+        setHash(observedHash)
+      }
+      if (persistence) {
+        if (!observedHash) throw new ImportPersistenceError('SHA-256을 계산하지 못해 원본을 서버에서 검증할 수 없습니다.')
+        setState('REGISTERING')
+        // The service registers, uploads without upsert, and invokes trusted
+        // server verification before any shared Dry-run can be persisted.
+        const source = await persistence.prepareSourceFile(file, observedHash, stage => {
+          if (currentRequest === requestId.current) setState(stage)
+        })
+        if (currentRequest !== requestId.current) return
+        setSourceFileId(source.id)
+      }
       setState('VALIDATING')
       await new Promise<void>(resolve => setTimeout(resolve, 0))
       const { analyzeMasterWorkbook } = await import('../../services/import')
       const result = await analyzeMasterWorkbook(bytes, file.name)
       if (currentRequest !== requestId.current) return
-      if (globalThis.crypto?.subtle) {
-        try {
-          const digest = await crypto.subtle.digest('SHA-256', bytes)
-          if (currentRequest !== requestId.current) return
-          setHash(Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join(''))
-        } catch {
-          // Keep the browser preview when hashing fails; shared persistence remains unavailable.
-        }
-      }
-      if (currentRequest !== requestId.current) return
       setPreview(result)
       setState('READY')
-    } catch {
+    } catch (error) {
       if (currentRequest !== requestId.current) return
-      setMessage('파일을 분석하지 못했습니다. 파일이 손상되었거나 지원하지 않는 Excel 형식일 수 있습니다.')
+      setMessage(error instanceof ImportPersistenceError ? error.message : '파일을 분석하거나 원본을 서버에서 검증하지 못했습니다. 파일과 연결 상태를 확인해 주세요.')
       setState('ERROR')
     }
   }
 
   const savePreview = async () => {
     const currentPreviewId = requestId.current
-    if (!persistence || !preview || !hash || saveState === 'SAVING' || saveState === 'SAVED' || savingPreviewId.current === currentPreviewId) return
+    if (!persistence || !preview || !hash || !sourceFileId || saveState === 'SAVING' || saveState === 'SAVED' || savingPreviewId.current === currentPreviewId) return
     savingPreviewId.current = currentPreviewId
     setSaveState('SAVING'); setMessage(null)
     try {
-      const batchId = await persistence.saveMasterDryRun(preview, hash)
+      const batchId = await persistence.saveMasterDryRun(preview, sourceFileId, hash)
       setHistoryRefresh(value => value + 1)
       if (currentPreviewId !== requestId.current) return
       setSavedBatchId(batchId)
@@ -143,10 +152,11 @@ export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: Im
   return <div className="feature-page master-import-page">
     <PageHeader eyebrow="MASTER IMPORT · DRY-RUN" title="Master Excel 분석" description="상품·SKU·BOM 후보를 원본 파일에서 읽어 검증합니다. 분석 결과는 이 화면에만 남으며 Master에는 반영되지 않습니다." />
     <section className="panel import-upload" aria-label="Master Excel 선택">
-      <div><h2>Master Excel 파일을 선택하세요</h2><p>땡스소윤 상품 단가표 형식의 .xlsx 파일을 지원합니다. 파일은 브라우저에서만 분석합니다.</p></div>
-      <div className="import-upload-actions"><label className="button import-picker">파일 선택<input aria-label="Master Excel 파일" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => chooseFile(event.target.files?.[0] ?? null)} /></label><button className="button button-primary" type="button" onClick={() => void analyze()} disabled={!file || state === 'READING' || state === 'VALIDATING' || (state === 'ERROR' && !/\.xlsx$/i.test(file?.name ?? ''))}>분석 시작</button></div>
+      <div><h2>Master Excel 파일을 선택하세요</h2><p>땡스소윤 상품 단가표 형식의 .xlsx 파일을 지원합니다. {persistence ? 'Private Storage에 원본을 저장하고 서버 SHA-256을 확인한 뒤 분석합니다.' : '파일은 브라우저에서만 분석합니다.'}</p></div>
+      <div className="import-upload-actions"><label className="button import-picker">파일 선택<input aria-label="Master Excel 파일" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => chooseFile(event.target.files?.[0] ?? null)} /></label><button className="button button-primary" type="button" onClick={() => void analyze()} disabled={!file || ['READING', 'REGISTERING', 'UPLOADING', 'VERIFYING', 'VALIDATING'].includes(state) || (state === 'ERROR' && !/\.xlsx$/i.test(file?.name ?? ''))}>분석 시작</button></div>
       {file && <dl className="import-file-meta"><div><dt>파일명</dt><dd>{file.name}</dd></div><div><dt>크기</dt><dd>{(file.size / 1024).toLocaleString('ko-KR', { maximumFractionDigits: 1 })} KB</dd></div>{hash && <div><dt>SHA-256</dt><dd className="mono">{hash}</dd></div>}</dl>}
-      {(state === 'READING' || state === 'VALIDATING') && <p role="status" className="import-progress">{state === 'READING' ? '파일을 읽는 중입니다…' : '원본 구조와 후보를 검증하는 중입니다…'}</p>}
+      {['READING', 'REGISTERING', 'UPLOADING', 'VERIFYING', 'VALIDATING'].includes(state) && <p role="status" className="import-progress">{state === 'READING' ? '파일을 읽는 중입니다…' : state === 'REGISTERING' ? '원본 등록 중입니다…' : state === 'UPLOADING' ? 'Private 원본 업로드 중입니다…' : state === 'VERIFYING' ? '서버 무결성 확인 중입니다…' : 'Dry-run 분석 중입니다…'}</p>}
+      {sourceFileId && <p className="import-progress">서버 검증 완료 · 원본 ID <span className="mono">{sourceFileId}</span></p>}
       {message && <p role="alert" className="import-error">{message}</p>}
     </section>
 
@@ -154,7 +164,7 @@ export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: Im
       <Summary preview={preview} />
       <section className="panel import-persistence" aria-label="검증 결과 중앙 저장">
         <div><h2>검증 결과 공유 저장</h2><p>원본 행과 검증 이슈, 요약만 중앙 저장소에 기록합니다. 저장 성공은 Master Apply 가능 상태를 의미하지 않습니다.</p></div>
-        {persistence ? <div className="import-persistence-actions"><button className="button button-primary" type="button" onClick={() => void savePreview()} disabled={!hash || saveState === 'SAVING' || saveState === 'SAVED'}>{saveState === 'SAVING' ? '저장 중…' : saveState === 'SAVED' ? '저장 완료' : '검증 결과 저장'}</button>{!hash && <span className="muted">SHA-256을 계산하지 못해 중앙 저장할 수 없습니다. 파일을 다시 분석해 주세요.</span>}</div> : <p className="muted">Supabase 모드에서만 공유 저장할 수 있습니다.</p>}
+        {persistence ? <div className="import-persistence-actions"><button className="button button-primary" type="button" onClick={() => void savePreview()} disabled={!hash || !sourceFileId || saveState === 'SAVING' || saveState === 'SAVED'}>{saveState === 'SAVING' ? '저장 중…' : saveState === 'SAVED' ? '저장 완료' : '검증 결과 저장'}</button>{!sourceFileId && <span className="muted">서버가 원본 SHA-256을 확인해야 공유 저장할 수 있습니다.</span>}</div> : <p className="muted">Supabase 모드에서만 공유 저장할 수 있습니다.</p>}
         {saveState === 'SAVED' && savedBatchId && <div className="import-save-success" role="status"><strong>검증 결과가 중앙 저장소에 저장되었습니다.</strong><span className="mono">Batch ID: {savedBatchId}</span><span>상태: REVIEW_REQUIRED</span><small>이 기록은 공유 검토용이며 Master Apply가 아닙니다.</small></div>}
         {saveState === 'ERROR' && <div className="import-error" role="alert"><strong>검증 결과를 저장하지 못했습니다.</strong><span>기존 Master 데이터는 변경되지 않았습니다.</span><button className="button button-small" type="button" onClick={() => setSaveState('IDLE')}>다시 시도</button></div>}
       </section>

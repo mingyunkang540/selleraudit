@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DataTable, Drawer, EmptyState, StatusBadge } from '../../components/ui'
-import type { ImportPersistence, SavedImportBatch, SavedImportCandidate, SavedImportIssue, SavedRawImportRow } from '../../services/importPersistence'
+import type { ImportPersistence, SavedImportBatch, SavedImportCandidate, SavedImportIssue, SavedImportSource, SavedRawImportRow } from '../../services/importPersistence'
 
 type ReviewRole = 'ADMIN' | 'EDITOR'
 type CandidateKindFilter = 'ALL' | SavedImportCandidate['kind']
@@ -115,6 +115,9 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
   const [loadingBatches, setLoadingBatches] = useState(true)
   const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedBatch, setSelectedBatch] = useState<SavedImportBatch | null>(null)
+  const [selectedSource, setSelectedSource] = useState<SavedImportSource | null>(null)
+  const [sourceError, setSourceError] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState(false)
   const [candidates, setCandidates] = useState<readonly SavedImportCandidate[]>([])
   const [issues, setIssues] = useState<readonly SavedImportIssue[]>([])
   const [loadingDetails, setLoadingDetails] = useState(false)
@@ -143,9 +146,24 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
   const openBatch = useCallback(async (batch: SavedImportBatch) => {
     selection.current = { batchId: batch.id, version: selection.current.version + 1 }
     ++rawRequest.current
-    setSelectedBatch(batch); setCandidates([]); setIssues([]); setKindFilter('ALL'); setStateFilter('ALL'); setCandidatePage(1); setSelectedCandidate(null); setSelectedIssue(null); setRawRow(null); setReviewError(null)
-    await loadDetails(batch)
-  }, [loadDetails])
+    setSelectedBatch(batch); setSelectedSource(null); setSourceError(null); setCandidates([]); setIssues([]); setKindFilter('ALL'); setStateFilter('ALL'); setCandidatePage(1); setSelectedCandidate(null); setSelectedIssue(null); setRawRow(null); setReviewError(null)
+    await Promise.all([loadDetails(batch), batch.sourceFileId ? persistence.loadSourceFile(batch.sourceFileId)
+      .then(next => { if (selection.current.batchId === batch.id) setSelectedSource(next) })
+      .catch(() => { if (selection.current.batchId === batch.id) setSourceError('원본 파일 검증 정보를 불러오지 못했습니다.') }) : Promise.resolve()])
+  }, [loadDetails, persistence])
+
+  const downloadSource = async () => {
+    if (!selectedBatch?.sourceFileId || selectedSource?.verificationStatus !== 'VERIFIED') return
+    setDownloading(true); setSourceError(null)
+    try {
+      const url = await persistence.createSourceDownloadUrl(selectedBatch.sourceFileId)
+      const link = document.createElement('a')
+      link.href = url
+      link.rel = 'noopener noreferrer'
+      link.click()
+    } catch { setSourceError('원본 파일 확인 링크를 만들지 못했습니다.') }
+    finally { setDownloading(false) }
+  }
 
   const openRaw = async (rowId: string | null) => {
     const currentRequest = ++rawRequest.current
@@ -200,6 +218,9 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
   const visibleCandidates = filteredCandidates.slice((candidatePage - 1) * PAGE_SIZE, candidatePage * PAGE_SIZE)
   const candidateTotal = selectedBatch ? selectedBatch.productCount + selectedBatch.skuCount + selectedBatch.bomCount : 0
   const legacyBatch = Boolean(selectedBatch && !loadingDetails && !detailError && candidateTotal > 0 && candidates.length === 0)
+  const verifiedSource = selectedBatch?.sourceHashVerification === 'SERVER_VERIFIED' &&
+    selectedSource?.verificationStatus === 'VERIFIED' && selectedSource.serverSha256 === selectedBatch.sourceHash
+  const reviewRole: ReviewRole = role === 'ADMIN' && verifiedSource ? 'ADMIN' : 'EDITOR'
 
   return <section className="panel import-saved" aria-label="최근 저장된 Master 검증">
     <div className="section-heading"><div><h2>최근 저장된 Master 검증</h2><p>현재 워크스페이스에 저장된 최근 20개 Dry-run 결과입니다.</p></div><span className="subtle-tag">SHARED REVIEW</span></div>
@@ -210,6 +231,17 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
     {selectedBatch && <section className="import-saved-detail" aria-label="저장된 Batch 상세">
       <div className="section-heading"><div><h3>저장된 Batch 상세</h3><p className="mono">Batch ID: {selectedBatch.id} · Validation r{selectedBatch.validationRevision}</p></div><StatusBadge status={selectedBatch.status} /></div>
       <dl className="import-batch-meta"><div><dt>파일명</dt><dd>{selectedBatch.sourceFilename}</dd></div><div><dt>저장 시각</dt><dd>{new Date(selectedBatch.createdAt).toLocaleString('ko-KR')}</dd></div><div><dt>원본 행</dt><dd>{count(selectedBatch.rowCount)}</dd></div><div><dt>후보 요약</dt><dd>Product {count(selectedBatch.productCount)} · SKU {count(selectedBatch.skuCount)} · BOM {count(selectedBatch.bomCount)}</dd></div></dl>
+      <section className="import-review-section" aria-label="원본 파일 검증"><h4>원본 파일 검증</h4>
+        {selectedBatch.sourceHashVerification === 'CLIENT_OBSERVED' || !selectedBatch.sourceFileId
+          ? <p className="import-legacy-notice">이 Batch는 원본 파일 서버 검증 기능 도입 이전 기록입니다. 저장된 hash는 client-observed 값입니다. 기존 기록은 조회할 수 있지만 새로운 검토 결과는 저장할 수 없습니다.</p>
+          : <><p><StatusBadge status={verifiedSource ? 'RESOLVED' : 'OPEN'} label={verifiedSource ? '서버 검증 완료' : selectedSource?.verificationStatus === 'HASH_MISMATCH' ? 'Hash 불일치' : '원본 검증 확인 필요'} /></p>
+            {selectedSource && <dl className="import-batch-meta"><div><dt>원본 파일명</dt><dd>{selectedSource.originalFilename}</dd></div><div><dt>Server SHA-256</dt><dd className="mono">{selectedSource.serverSha256 ?? '—'}</dd></div><div><dt>파일 크기</dt><dd>{selectedSource.serverByteSize === null ? '—' : `${count(selectedSource.serverByteSize)} bytes`}</dd></div><div><dt>검증 시각</dt><dd>{selectedSource.verifiedAt ? new Date(selectedSource.verifiedAt).toLocaleString('ko-KR') : '—'}</dd></div></dl>}
+            {verifiedSource && <button className="button button-small" type="button" disabled={downloading} onClick={() => void downloadSource()}>{downloading ? '링크 생성 중…' : '원본 파일 확인'}</button>}
+            {sourceError && <p className="import-error" role="alert">{sourceError}</p>}
+            {!verifiedSource && <p className="import-readonly-note">서버 검증된 원본을 확인할 수 없어 새로운 검토 결과를 저장할 수 없습니다.</p>}
+          </>}
+        <p className="import-readonly-note">Review 근거: 원본 ID, 서버 SHA-256, parser {selectedBatch.parserVersion || '이전 버전'}, validation r{selectedBatch.validationRevision}. 어느 하나가 달라지면 기존 검토를 새 분석의 승인 근거로 자동 재사용할 수 없습니다.</p>
+      </section>
       <div className="import-saved-summary" aria-label="저장된 후보 판정 요약"><div><span>정상</span><strong>{count(selectedBatch.validCount)}</strong></div><div><span>주의</span><strong>{count(selectedBatch.warningCount)}</strong></div><div><span>오류</span><strong>{count(selectedBatch.errorCount)}</strong></div><div><span>보류</span><strong>{count(selectedBatch.deferredCount)}</strong></div></div>
       <p className="import-limitation">이 화면은 Candidate Snapshot과 사람의 검토 결정을 기록합니다. Master Apply 기능은 없으며 Batch는 REVIEW_REQUIRED 상태를 유지합니다.</p>
       {loadingDetails && <p className="import-section-state" role="status">저장된 후보와 이슈를 불러오는 중입니다…</p>}{detailError && <p className="import-error import-section-state" role="alert">{detailError}</p>}
@@ -224,7 +256,7 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
         {!issues.length ? <EmptyState title="저장된 검증 이슈가 없습니다" /> : <DataTable minWidth={940}><thead><tr><th>심각도</th><th>코드</th><th>시트 / 행</th><th>원본 값</th><th>메시지</th><th>상태</th><th>검토</th></tr></thead><tbody>{issues.map(issue => <tr key={issue.id}><td><StatusBadge status={issue.severity} /></td><td className="mono">{issue.issueCode}</td><td>{source(issue.sourceSheet ?? '전체', issue.sourceRow)}</td><td className="import-observed">{observed(issue.observedValue)}</td><td>{issue.message}</td><td><StatusBadge status={issue.status} label={statusLabel[issue.status] ?? issue.status} /></td><td><button className="button button-small" type="button" onClick={() => openIssue(issue)}>이슈 상세</button></td></tr>)}</tbody></DataTable>}
       </>}
     </section>}
-    {selectedCandidate && <CandidateDetail key={`${selectedCandidate.id}:${selectedCandidate.reviewRevision}`} candidate={selectedCandidate} issues={issues} rawRow={rawRow} loadingRaw={loadingRaw} rawError={rawError} role={role} saving={savingReview} saveError={reviewError} onSave={saveCandidate} onClose={closeDrawer} />}
-    {selectedIssue && <IssueDetail key={`${selectedIssue.id}:${selectedIssue.reviewRevision}`} issue={selectedIssue} rawRow={rawRow} loading={loadingRaw} error={rawError} role={role} saving={savingReview} saveError={reviewError} onSave={saveIssue} onClose={closeDrawer} />}
+    {selectedCandidate && <CandidateDetail key={`${selectedCandidate.id}:${selectedCandidate.reviewRevision}`} candidate={selectedCandidate} issues={issues} rawRow={rawRow} loadingRaw={loadingRaw} rawError={rawError} role={reviewRole} saving={savingReview} saveError={reviewError} onSave={saveCandidate} onClose={closeDrawer} />}
+    {selectedIssue && <IssueDetail key={`${selectedIssue.id}:${selectedIssue.reviewRevision}`} issue={selectedIssue} rawRow={rawRow} loading={loadingRaw} error={rawError} role={reviewRole} saving={savingReview} saveError={reviewError} onSave={saveIssue} onClose={closeDrawer} />}
   </section>
 }

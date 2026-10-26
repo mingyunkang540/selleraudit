@@ -96,3 +96,41 @@ LIVE AUTH / BROWSER = PASS (ADMIN, EDITOR, VIEWER, DISABLED)
 로컬 `.env.remote-test.local.txt`는 Git에서 제외하며 테스트 계정의 이메일·비밀번호를 담는다. `node scripts/remote-5e-auth-check.mjs`로 네 계정의 실제 Auth 로그인과 표시 가능한 멤버십을 다시 검사하고, `node scripts/remote-5e-browser-roles.mjs`로 VIEWER·DISABLED의 브라우저 접근 차단을 다시 검사할 수 있다. 이 두 스크립트는 Import 기록을 생성하거나 삭제하지 않는다. EDITOR 인수 스크립트의 `api` 단계는 원격 fixture를 생성하므로 정확한 ID를 기록하고 수동 cleanup할 수 있을 때만 재실행한다.
 
 `db reset --linked`를 실행하거나 기존 테스트 계정·Workspace를 삭제하지 않는다. Development 결과를 Production 인수로 취급하지 않는다.
+
+## Prompt 5F 원본 Storage 및 서버 SHA-256 인수 (2026-10-26)
+
+정확한 Development 프로젝트 `selleraudit-dev` (`yzpkhvuftusnshdqfnim`)에 `20261026121803_private_master_source_verification.sql`, `20261026121915_move_5f_trusted_functions_private.sql`을 적용했다. 로컬/원격 Migration version은 10개가 일치한다. private `seller-audit-import-sources` bucket은 50 MiB 제한과 XLSX MIME allowlist를 가지며, `verify-master-import-source` 및 `create-master-source-download-url` Edge Function v2는 JWT 검증을 켜고 배포했다. service-role secret은 Edge 서버에서만 사용한다. v2 배포 후 네 역할의 알 수 없는 SourceFile 접근 거부를 별도 smoke check로 확인했다.
+
+실제 ADMIN·EDITOR·VIEWER·DISABLED Auth 세션과 작은 acceptance XLSX로 다음을 검증했다.
+
+| 범위 | 결과 |
+| --- | --- |
+| ADMIN·EDITOR 등록, private 업로드, 서버 SHA-256 검증 | PASS |
+| client/server hash 및 byte 크기 일치, VERIFIED 재호출 멱등성 | PASS |
+| VIEWER·DISABLED 등록·업로드·검증·metadata·signed URL 거부 | PASS |
+| 익명 함수 호출·private direct download, 인증 사용자의 direct Storage SELECT 거부 | PASS |
+| ADMIN 60초 signed URL 발급과 다운로드 byte hash 일치 | PASS |
+| 같은 경로 overwrite/update 거부 | PASS |
+| 다른 hash, 없는 객체, 잘못된 byte 크기의 실패 처리와 미검증 저장 거부 | PASS |
+| 기존 7-argument persistence 거부, 검증된 SourceFile로 Batch·Raw·Candidate·Issue·Log 원자 저장 | PASS |
+| Batch의 SourceFile ID·server hash·`SERVER_VERIFIED`·`REVIEW_REQUIRED` | PASS |
+| ADMIN Candidate/Issue review 허용, EDITOR review 거부 | PASS |
+| 다른 Workspace 등록·객체 경로 업로드·조회·저장 거부 | PASS |
+| Product·SKU·BOM Master 불변 | PASS |
+
+`scripts/remote-5f-source-acceptance.mjs`의 기본, `post`, `finish` 단계가 위 실제 Auth/Storage/Edge/DB 경계를 검사했다. Legacy `CLIENT_OBSERVED` Batch의 Candidate·Issue 새 review 거부는 PGlite DB contract에서 검증했다. 화면 동작은 Supabase-mode fake API E2E에서 검증했다. 실제 브라우저에서 원본 다운로드 버튼을 누르는 별도 수동 검사는 수행하지 않았으므로 signed URL의 실제 byte 다운로드 검증을 그 네트워크 동작의 근거로 사용한다.
+
+인수 fixture는 SourceFile ID 5개, Storage 객체 4개(없는 객체 검증 fixture 1개), Batch ID 2개와 정확한 Raw 2개·Candidate 2개·Issue 1개·ActivityLog 6개를 기록했다. Workspace·등록자·파일명·object path·Batch 연결을 대조한 뒤 객체는 경로마다 하나씩, DB 행은 ID마다 한 transaction에서 삭제했다. 사후 exact ID 조회 결과 SourceFile·Batch·Raw·Candidate·Issue·ActivityLog는 모두 0건이고 해당 Workspace의 Storage 객체도 0건이다. Product·SKU·BOM은 전후 각각 0건이다. 임시 ID 기록 파일은 확인 후 삭제했다.
+
+Security Advisor의 새 finding은 0건이다. 기존 `Leaked Password Protection Disabled` warning 1건은 남아 있으며 [Supabase 비밀번호 보호 설정](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection)이 Pilot 운영 전 과제다. Production에는 배포하지 않았다.
+
+```text
+LOCAL 5F = GO
+REMOTE STORAGE = PASS
+REMOTE SERVER HASH = PASS
+REMOTE RLS = PASS
+REMOTE VERIFIED PERSISTENCE = PASS
+OVERALL REMOTE 5F = GO
+```
+
+원본 검증은 Approval이나 Apply가 아니다. `READY_TO_APPLY`, Product/SKU/BOM Apply, validation revision 2와 Storage 자동 정리는 범위 밖이다. 상세 신뢰 계약과 backup 한계는 [원본 보관·검증](data/IMPORT_SOURCE_STORAGE.md)에 기록했다.

@@ -1,6 +1,6 @@
 # SellerAudit Foundation + Supabase Development Integration
 
-SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준의 판매상품 Master에 연결하고 검수하는 운영 도구입니다. 기본 Mock/localStorage 모드와 Development Supabase 프로젝트의 Auth·중앙 Repository 모드를 지원합니다. Master Excel Dry-run은 브라우저에서 실행하며, Supabase 모드의 ADMIN과 EDITOR는 Raw·Product/SKU/BOM Candidate·검증 이슈를 중앙 Import 기록으로 저장할 수 있습니다. ADMIN은 normalized snapshot을 바꾸지 않고 reviewed override와 Issue 결정을 기록합니다. Product·SKU·BOM Apply는 아직 없습니다.
+SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준의 판매상품 Master에 연결하고 검수하는 운영 도구입니다. 기본 Mock/localStorage 모드와 Development Supabase 프로젝트의 Auth·중앙 Repository 모드를 지원합니다. Supabase 모드에서는 Master Excel 원본을 private Storage에 저장하고 서버가 실제 byte의 SHA-256을 확인한 뒤에만 새 Batch를 중앙 저장합니다. ADMIN은 normalized snapshot을 바꾸지 않고 reviewed override와 Issue 결정을 기록합니다. Human Review는 validation, approval, Apply와 별개이며 Product·SKU·BOM Apply는 아직 없습니다.
 
 ## 현재 구현 범위
 
@@ -12,7 +12,7 @@ SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준�
 - Supabase 모드에서 이메일/비밀번호 로그인, 세션 복원, 로그아웃과 ACTIVE Workspace 선택
 - ADMIN/EDITOR/VIEWER 역할 표시 및 VIEWER의 Mapping·Audit 변경과 Master Dry-run 실행 차단
 - Supabase에서 Product·SKU·BOM·Channel·Listing·Offer·Alias·Audit Issue를 읽고 기존 두 업무 RPC로 변경
-- Supabase ADMIN/EDITOR가 Master Dry-run의 Batch·Raw·Candidate·Issue를 원자적으로 저장하고 같은 Workspace에서 공유 검토
+- Supabase ADMIN/EDITOR가 private 원본을 업로드하고 서버 SHA-256 검증 후 Batch·Raw·Candidate·Issue를 원자적으로 저장하고 같은 Workspace에서 공유 검토
 - ADMIN이 Candidate reviewed override와 Issue 결정을 기록하고 EDITOR는 같은 내용을 read-only로 확인
 - 대시보드와 판매채널·워크스페이스 조회 화면 제공
 - Master `.xlsx` 파일을 브라우저에서 분석하고 후보·검증 이슈를 미리보기로 확인. DB Apply는 없음
@@ -64,9 +64,9 @@ UI는 `SellerRepository` 인터페이스에 의존합니다. Mock 모드의 수�
 
 Supabase 모드는 Auth Session의 ACTIVE 멤버십으로 Workspace를 선택하고 중앙 PostgreSQL에서 업무 데이터를 읽습니다. 수동 매핑과 Issue 상태 변경은 `map_offer`, `update_issue_status` RPC를 호출한 뒤 데이터를 다시 읽습니다. 업무 데이터는 `localStorage`에 저장하지 않으며 사용자별 마지막 Workspace ID만 편의 설정으로 보관합니다. URL 또는 publishable key가 없으면 설정 오류를 표시하고 Mock 모드로 자동 전환하지 않습니다.
 
-Master Excel 분석은 `SellerRepository`와 분리된 Import 전용 서비스에서 처리합니다. Supabase 모드의 ADMIN/EDITOR가 `검증 결과 저장`을 실행하면 Batch, Raw Row, Product/SKU/BOM Candidate, Validation Issue와 `IMPORT_VALIDATED` ActivityLog가 한 RPC로 중앙 DB에 저장됩니다. `normalized_values`는 immutable snapshot으로 남고 ADMIN의 수정은 별도 `reviewed_values`와 `IMPORT_REVIEWED` 로그에 기록됩니다. Issue decision도 원본 이슈를 삭제하거나 Candidate status를 바꾸지 않습니다. 저장과 검토 뒤에도 Batch는 `REVIEW_REQUIRED`이며 Master에는 반영되지 않습니다. 지원 형식과 한계는 [Master Import Dry-run](docs/data/MASTER_IMPORT_DRY_RUN.md), 저장 계약은 [Master Import persistence](docs/data/MASTER_IMPORT_PERSISTENCE.md), review 의미는 [Candidate Review](docs/data/IMPORT_CANDIDATE_REVIEW.md)를 참고하세요.
+Master Excel 분석은 `SellerRepository`와 분리된 Import 전용 서비스에서 처리합니다. Supabase 모드는 원본 등록→private 업로드→서버 SHA-256 확인→브라우저 Dry-run→검증된 SourceFile ID로 중앙 저장 순서로 진행합니다. Batch, Raw Row, Product/SKU/BOM Candidate, Validation Issue와 `IMPORT_VALIDATED` ActivityLog가 한 RPC로 DB에 저장됩니다. `normalized_values`는 immutable snapshot이고 ADMIN의 변경은 별도 `reviewed_values`와 `IMPORT_REVIEWED` 로그에 기록됩니다. 저장과 검토 뒤에도 Batch는 `REVIEW_REQUIRED`이며 Master에는 반영되지 않습니다. [Master Import Dry-run](docs/data/MASTER_IMPORT_DRY_RUN.md), [원본 보관·검증](docs/data/IMPORT_SOURCE_STORAGE.md), [저장 계약](docs/data/MASTER_IMPORT_PERSISTENCE.md), [Candidate Review](docs/data/IMPORT_CANDIDATE_REVIEW.md)를 참고하세요.
 
-SQL 스키마와 RPC 계약은 `supabase/`에 있습니다. 로컬 Migration에는 ACTIVE Workspace 역할, Import 이력·Candidate·ActivityLog 테이블, RLS와 trusted persistence/review RPC가 포함됩니다. `selleraudit-dev`에는 저장소의 8개 Migration이 적용됐고 5E 원격 DB contract와 실제 ADMIN·EDITOR·VIEWER·DISABLED 로그인·브라우저 인수가 통과했습니다. 최종 `REMOTE 5E ACCEPTANCE = GO`입니다. [DB Foundation 상세](docs/data/IMPORT_DB_FOUNDATION.md), [Supabase 개발 통합](docs/SUPABASE_DEVELOPMENT_INTEGRATION.md), [Remote Acceptance](docs/SUPABASE_REMOTE_ACCEPTANCE.md)를 참고하세요.
+SQL 스키마와 RPC 계약은 `supabase/`에 있습니다. `selleraudit-dev`에는 저장소의 10개 Migration과 5F Edge Function 2개가 적용됐습니다. 5E 인수는 GO였고 5F 원격 Storage·서버 hash·RLS·검증된 persistence 인수와 fixture cleanup도 통과했습니다. 상세 결과는 [Remote Acceptance](docs/SUPABASE_REMOTE_ACCEPTANCE.md)를 참고하세요. [DB Foundation](docs/data/IMPORT_DB_FOUNDATION.md)과 [Supabase 개발 통합](docs/SUPABASE_DEVELOPMENT_INTEGRATION.md)에도 이전 단계 계약이 있습니다.
 
 ## 검증 명령
 
@@ -95,4 +95,4 @@ npm.cmd uninstall --prefix $sellerAuditQa --no-save --package-lock=false '@elect
 
 ## Stop Line
 
-로컬 Supabase 통합, Master Dry-run의 Batch·Raw·Candidate·Issue 중앙 저장과 ADMIN Human Review를 구현했습니다. 기존 5D 인수와 5E 원격 DB contract 및 실제 Auth/브라우저 인수는 모두 통과해 `REMOTE 5E ACCEPTANCE = GO`입니다. 원본 `.xlsx` binary, server-verified hash와 Product·SKU·BOM Apply는 저장하거나 실행하지 않습니다. Excel Storage 업로드, 직원 초대·Role 관리 UI와 회사 Production 배포도 구현하지 않습니다.
+Master 원본 private Storage와 서버 SHA-256 검증, 검증된 Batch 저장, ADMIN Human Review까지 구현했습니다. Product·SKU·BOM Apply, Approval, `READY_TO_APPLY`, validation revision 2, 직원 초대·Role 관리 UI, 회사 Production 배포는 구현하지 않았습니다. DB metadata backup은 Storage 원본 binary backup을 포함하지 않습니다.

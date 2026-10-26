@@ -7,7 +7,8 @@ Supabase 모드의 ADMIN과 EDITOR는 브라우저 Master Workbook Dry-run 결�
 ```text
 LOCAL 5E IMPLEMENTATION = GO
 REMOTE 5D ACCEPTANCE = GO (PROJECT OWNER REPORTED, 2026-10-25)
-REMOTE 5E ACCEPTANCE = HOLD (DB CONTRACT PASS, LIVE AUTH/BROWSER PARTIAL)
+REMOTE 5E ACCEPTANCE = GO
+REMOTE 5F ACCEPTANCE = GO (EXACT FIXTURE CLEANUP PASS)
 ```
 
 5D 프로젝트 identity와 기존 remote migration 5개는 read-only 연결로 확인했다. 5D Auth/RLS/RPC 동작 결과는 프로젝트 소유자가 제공한 결과다. 자세한 범위는 [Remote Acceptance](../SUPABASE_REMOTE_ACCEPTANCE.md)를 참고한다.
@@ -16,10 +17,12 @@ REMOTE 5E ACCEPTANCE = HOLD (DB CONTRACT PASS, LIVE AUTH/BROWSER PARTIAL)
 
 ```text
 .xlsx 선택
+→ private SourceFile 등록 및 업로드
+→ Edge Function이 저장된 byte의 SHA-256 재계산
 → 브라우저 Master Dry-run
 → Product / SKU / BOM 후보와 검증 이슈 확인
 → "검증 결과 저장"
-→ public.persist_master_import_dry_run(... 7 args ...)
+→ public.persist_verified_master_import_dry_run(... source_file_id ...)
 → Batch + Raw + Candidate + Issue + IMPORT_VALIDATED
 → ADMIN Human Review
 → reviewed override 또는 Issue decision + IMPORT_REVIEWED
@@ -42,13 +45,12 @@ Prompt 5E Migration은 다음 파일이다.
 
 ## Persistence RPC
 
-브라우저의 새 persistence 경계는 다음 함수다.
+5E의 7-argument RPC는 이제 브라우저에서 실행할 수 없다. 5F의 새 persistence 경계는 다음 함수다.
 
 ```sql
-public.persist_master_import_dry_run(
+public.persist_verified_master_import_dry_run(
   p_workspace_id uuid,
-  p_source_filename text,
-  p_source_file_hash text,
+  p_source_file_id uuid,
   p_summary jsonb,
   p_raw_rows jsonb,
   p_candidates jsonb,
@@ -56,7 +58,7 @@ public.persist_master_import_dry_run(
 ) returns uuid
 ```
 
-기존 6-argument public/private 함수는 migration history와 trusted service compatibility를 위해 남기지만 `authenticated`의 `EXECUTE`는 revoke한다. 따라서 browser client는 Candidate 없이 새 Batch를 만들 수 없다.
+기존 6-argument와 7-argument 공개 persistence 함수는 migration history 때문에 남아 있지만 `authenticated`의 `EXECUTE`는 revoke한다. 새 RPC는 SourceFile의 `VERIFIED` 상태를 잠금 상태에서 확인하고 파일명과 hash를 DB 서버 검증 metadata에서 가져온다. [원본 보관·검증](IMPORT_SOURCE_STORAGE.md)을 참고한다.
 
 공개 wrapper는 `SECURITY INVOKER`다. private `SECURITY DEFINER` 구현은 `search_path = ''`, fully-qualified relation, `auth.uid()`와 현재 ACTIVE Workspace role 검사를 사용한다. 클라이언트는 actor ID, role, Batch status, parser version, validation revision 또는 Raw UUID를 보내지 않는다.
 
@@ -169,7 +171,7 @@ Candidate/Issue review 성공 시 대상 entity로 `IMPORT_REVIEWED`를 한 건 
 
 ## Client-observed Hash and Storage Boundary
 
-`source_file_hash`는 브라우저가 선택한 byte stream에서 계산한 **client-observed SHA-256**이다. 5E는 원본 binary를 DB 또는 Supabase Storage에 업로드하지 않고 서버가 hash를 다시 계산하지 않는다. 저장된 hash를 `server-verified hash` 또는 Apply 신뢰 근거로 표현하지 않는다.
+5E 이전 Batch의 `source_file_hash`는 client-observed SHA-256이다. 5F의 새 Batch는 private Storage 원본을 서버가 읽어 계산한 SHA-256을 기록하며 `source_file_id`와 `SERVER_VERIFIED` trust flag를 가진다. 원본 검증이나 Human Review만으로 Apply 신뢰 근거가 완성되지는 않는다.
 
 ## Master Data Protection
 
@@ -198,23 +200,21 @@ Human Review는 Master 변경, diff, approval 또는 Apply가 아니다.
 
 ## Remote Acceptance
 
-기존 5D 원격 인수는 Candidate snapshot 이전의 다섯 Migration에 대한 결과다. Prompt 5E Migration 2개도 정확한 `selleraudit-dev` 프로젝트에 적용됐고 새 Candidate/Review API의 역할별 DB contract는 통과했다. 실제 Auth 브라우저 인수는 ADMIN·VIEWER·DISABLED에서 통과했고 EDITOR 계정 검증이 남아 있다.
+5E 원격 인수는 ADMIN·EDITOR·VIEWER·DISABLED 실제 Auth/브라우저까지 GO다. 5F Migration 2개와 Edge Function 2개를 `selleraudit-dev`에 배포했고 원격 Storage/hash/역할 검증과 정확한 fixture cleanup이 통과했다. [Remote Acceptance](../SUPABASE_REMOTE_ACCEPTANCE.md)에 범위와 증거를 기록했다.
 
 ```text
-REMOTE 5E ACCEPTANCE = HOLD
-DB CONTRACT = PASS
-LIVE AUTH / BROWSER = PARTIAL (EDITOR PENDING)
+REMOTE 5E ACCEPTANCE = GO
+REMOTE 5F ACCEPTANCE = GO
 ```
 
-원격 DB에서는 Candidate persistence, SELECT RLS, ADMIN review, EDITOR denial, cross-Workspace denial, stale revision, malformed Candidate rollback, ActivityLog와 Master table row count 불변을 통과했다. GO 판정 전 실제 ADMIN/EDITOR/VIEWER/DISABLED Auth 브라우저 세션에서 같은 경계를 확인한다.
+5F 역할별 원격 결과와 정리 범위는 Remote Acceptance 문서에 별도로 기록한다.
 
 ## Current Stop Line
 
-5E는 Candidate snapshot과 Human Review 기록까지다. 다음 기능은 구현하지 않는다.
+5F는 private 원본 보관·서버 hash 검증·검증된 중앙 저장·Human Review 기록까지다. 다음 기능은 구현하지 않는다.
 
 - Product, SKU, ProductComponent INSERT/UPDATE 또는 automatic correction
 - Master diff, approval, `READY_TO_APPLY`, Apply 또는 merge
-- 원본 `.xlsx` binary Storage와 server-verified SHA-256
 - revalidation revision 2 생성과 Candidate status 자동 변경
 - Sales, Marketing, Barcode 또는 Channel Import persistence
 - Production 배포

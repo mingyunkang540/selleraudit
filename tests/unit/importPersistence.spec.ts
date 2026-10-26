@@ -9,6 +9,7 @@ import type { MasterImportPreview } from '../../src/types/import'
 const workspaceId = 'workspace-a'
 const batchId = 'batch-a'
 const hash = 'a'.repeat(64)
+const sourceFileId = '00000000-0000-4000-8000-000000000099'
 
 function preview(): MasterImportPreview {
   return {
@@ -150,15 +151,18 @@ test('candidate ordinals restart per kind and supporting evidence uses a real ra
 test('save uses trusted RPC and returns batch id; errors do not leak database detail', async () => {
   const fake = fakeClient({})
   const persistence = createImportPersistence({ supabase: fake.supabase, workspaceId })
-  await expect(persistence.saveMasterDryRun(preview(), hash)).resolves.toBe(batchId)
-  expect(fake.calls).toEqual([{ name: 'persist_master_import_dry_run', args: {
-    p_workspace_id: workspaceId, ...buildMasterImportPayload(preview(), hash),
+  await expect(persistence.saveMasterDryRun(preview(), sourceFileId, hash)).resolves.toBe(batchId)
+  const payload = buildMasterImportPayload(preview(), hash)
+  expect(fake.calls).toEqual([{ name: 'persist_verified_master_import_dry_run', args: {
+    p_workspace_id: workspaceId, p_source_file_id: sourceFileId,
+    p_summary: payload.p_summary, p_raw_rows: payload.p_raw_rows,
+    p_candidates: payload.p_candidates, p_issues: payload.p_issues,
   } }])
   const failed = createImportPersistence({
     supabase: fakeClient({}, () => ({ data: null, error: new Error('secret SQL detail') })).supabase,
     workspaceId,
   })
-  await expect(failed.saveMasterDryRun(preview(), hash)).rejects.toThrow('Dry-run 저장에 실패했습니다.')
+  await expect(failed.saveMasterDryRun(preview(), sourceFileId, hash)).rejects.toThrow('Dry-run 저장에 실패했습니다.')
 })
 
 test('lists only selected workspace Master batches and maps candidate counts', async () => {
@@ -167,7 +171,8 @@ test('lists only selected workspace Master batches and maps candidate counts', a
   const saved = await createImportPersistence({ supabase: fake.supabase, workspaceId }).listSavedMasterImports()
   expect(saved).toEqual([{ id: batchId, sourceFilename: '원본.xlsx', createdAt: '2026-10-25T00:00:00Z',
     status: 'REVIEW_REQUIRED', validationRevision: 1, rowCount: 1, productCount: 1, skuCount: 0, bomCount: 0,
-    validCount: 0, warningCount: 0, errorCount: 1, deferredCount: 0, createdBy: 'user-a' }])
+    validCount: 0, warningCount: 0, errorCount: 1, deferredCount: 0, createdBy: 'user-a',
+    sourceFileId: null, sourceHashVerification: 'CLIENT_OBSERVED', sourceHash: '', parserVersion: '' }])
 })
 
 test('loads saved issue provenance and raw cells only on explicit detail request', async () => {

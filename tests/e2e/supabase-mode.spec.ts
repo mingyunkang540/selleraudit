@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 import * as XLSX from 'xlsx'
+import { createHash } from 'node:crypto'
 
 type Role = 'ADMIN' | 'EDITOR' | 'VIEWER'
 type WorkspaceFixture = { id: string; name: string; role: Role; productName?: string }
@@ -14,6 +15,7 @@ type ImportFixture = {
   rawReads?: { count: number }
   candidateReviews?: Array<Record<string, unknown>>
   issueReviews?: Array<Record<string, unknown>>
+  sources?: Record<string, Record<string, unknown>>
 }
 
 const user = {
@@ -53,26 +55,69 @@ async function json(route: Route, body: unknown, status = 200) {
 }
 
 async function installFakeSupabase(page: Page, workspaces: WorkspaceFixture[], imports: ImportFixture = { batches: [] }) {
+  const sourceRegistrations = new Map<string, { id: string; workspaceId: string; filename: string; clientHash: string; bytes?: Buffer; serverHash?: string }>()
   await page.route('http://127.0.0.1:54321/**', async route => {
     const request = route.request()
     const url = new URL(request.url())
     if (url.pathname === '/auth/v1/token') return json(route, session)
     if (url.pathname === '/auth/v1/user') return json(route, user)
     if (url.pathname === '/auth/v1/logout') return route.fulfill({ status: 204, body: '' })
+    if (url.pathname.startsWith('/storage/v1/object/seller-audit-import-sources/')) {
+      const path = url.pathname.slice('/storage/v1/object/seller-audit-import-sources/'.length)
+      const registration = sourceRegistrations.get(path)
+      if (!registration) return json(route, { message: 'unregistered path' }, 403)
+      if (registration.bytes) return json(route, { message: 'object exists' }, 409)
+      const posted = request.postDataBuffer() ?? Buffer.alloc(0)
+      const form = await new Request('http://fixture.local', {
+        method: 'POST', headers: { 'content-type': request.headers()['content-type'] },
+        body: posted.buffer.slice(posted.byteOffset, posted.byteOffset + posted.byteLength) as ArrayBuffer,
+      }).formData()
+      const uploadedFile = [...form.values()].find(value => value instanceof File)
+      registration.bytes = uploadedFile ? Buffer.from(await uploadedFile.arrayBuffer()) : Buffer.alloc(0)
+      registration.serverHash = createHash('sha256').update(registration.bytes).digest('hex')
+      return json(route, { path })
+    }
+    if (url.pathname === '/functions/v1/verify-master-import-source') {
+      const payload = request.postDataJSON() as Record<string, unknown>
+      const source = [...sourceRegistrations.values()].find(item => item.id === payload.sourceFileId)
+      if (!source || !source.bytes) return json(route, { status: 'VERIFICATION_FAILED' })
+      const status = source.serverHash === source.clientHash ? 'VERIFIED' : 'HASH_MISMATCH'
+      imports.sources ??= {}
+      imports.sources[source.id] = {
+        id: source.id, workspace_id: source.workspaceId, original_filename: source.filename,
+        verification_status: status, server_verified_sha256: source.serverHash,
+        server_verified_byte_size: source.bytes.length, verified_at: '2026-10-25T09:00:00.000Z',
+      }
+      return json(route, { status, sourceFileId: source.id,
+        serverSha256: source.serverHash, serverByteSize: source.bytes.length })
+    }
     if (!url.pathname.startsWith('/rest/v1/')) return json(route, { message: 'unexpected test request' }, 404)
 
     const table = url.pathname.slice('/rest/v1/'.length)
-    if (table === 'rpc/persist_master_import_dry_run') {
+    if (table === 'rpc/register_master_import_source') {
+      const payload = request.postDataJSON() as Record<string, unknown>
+      const id = `00000000-0000-4000-8000-${String(sourceRegistrations.size + 1).padStart(12, '0')}`
+      const workspaceId = String(payload.p_workspace_id)
+      const path = `${workspaceId}/${id}/source.xlsx`
+      sourceRegistrations.set(path, { id, workspaceId, filename: String(payload.p_original_filename),
+        clientHash: String(payload.p_client_observed_sha256) })
+      return json(route, [{ source_file_id: id, bucket: 'seller-audit-import-sources', object_path: path }])
+    }
+    if (table === 'rpc/persist_verified_master_import_dry_run') {
       if (imports.rpcGate) await imports.rpcGate
       if (imports.rpcError) return json(route, { message: imports.rpcError }, 400)
       const payload = request.postDataJSON() as Record<string, unknown>
       const summary = payload.p_summary as Record<string, number>
       const rawRows = payload.p_raw_rows as unknown[]
       const candidates = payload.p_candidates as Array<Record<string, unknown>>
+      const source = imports.sources?.[String(payload.p_source_file_id)]
+      if (!source || source.verification_status !== 'VERIFIED') return json(route, { message: 'verified source required' }, 400)
       const batchId = `batch-${imports.batches.length + 1}`
       imports.batches.unshift({
         id: batchId, workspace_id: payload.p_workspace_id, source_type: 'MASTER_WORKBOOK',
-        source_filename: payload.p_source_filename, created_at: '2026-10-25T09:00:00.000Z',
+        source_filename: source.original_filename, source_file_id: source.id,
+        source_file_hash: source.server_verified_sha256, source_hash_verification: 'SERVER_VERIFIED',
+        parser_version: 'master-v1.0.0', created_at: '2026-10-25T09:00:00.000Z',
         status: 'REVIEW_REQUIRED', validation_revision: 1, row_count: rawRows.length,
         product_candidate_count: summary.productCount, sku_candidate_count: summary.skuCount,
         bom_candidate_count: summary.bomCount, valid_count: summary.validCount,
@@ -152,6 +197,11 @@ async function installFakeSupabase(page: Page, workspaces: WorkspaceFixture[], i
       if (request.headers().accept?.includes('application/vnd.pgrst.object+json')) return json(route, rows[0] ?? null, rows.length ? 200 : 406)
       return json(route, rows.slice(0, Number(url.searchParams.get('limit') ?? 20)))
     }
+    if (table === 'import_source_files') {
+      const sourceId = selected(url, 'id')
+      const source = sourceId ? imports.sources?.[sourceId] : undefined
+      return json(route, source ?? null, source ? 200 : 406)
+    }
     if (table === 'import_validation_issues') {
       const batchId = selected(url, 'import_batch_id')
       return json(route, batchId ? imports.issuesByBatch?.[batchId] ?? [] : [])
@@ -212,14 +262,22 @@ async function analyzeFixture(page: Page, fileName = 'sanitized-master.xlsx') {
 function savedReviewFixture(): ImportFixture {
   const batchId = 'batch-review'
   const rawRowId = 'raw-100526'
+  const sourceFileId = '00000000-0000-4000-8000-000000000111'
   return {
     batches: [{
       id: batchId, workspace_id: 'workspace-a', source_type: 'MASTER_WORKBOOK',
+      source_file_id: sourceFileId, source_file_hash: 'a'.repeat(64),
+      source_hash_verification: 'SERVER_VERIFIED', parser_version: 'master-v1.0.0',
       source_filename: 'review-master.xlsx', created_at: '2026-10-25T08:30:00.000Z',
       status: 'REVIEW_REQUIRED', validation_revision: 1, row_count: 1,
       product_candidate_count: 1, sku_candidate_count: 0, bom_candidate_count: 0,
       valid_count: 0, warning_count: 0, error_count: 1, deferred_count: 0, created_by: user.id,
     }],
+    sources: { [sourceFileId]: {
+      id: sourceFileId, workspace_id: 'workspace-a', original_filename: 'review-master.xlsx',
+      verification_status: 'VERIFIED', server_verified_sha256: 'a'.repeat(64),
+      server_verified_byte_size: 1024, verified_at: '2026-10-25T08:29:00.000Z',
+    } },
     candidatesByBatch: {
       [batchId]: [{
         id: 'candidate-100526', workspace_id: 'workspace-a', import_batch_id: batchId,

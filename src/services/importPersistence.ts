@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { MasterImportPreview, RawCellValue, RawImportCell, ProductCandidate, SkuCandidate, BomCandidate } from '../types/import'
 
-type ImportClient = Pick<SupabaseClient, 'from' | 'rpc'>
+type ImportClient = Pick<SupabaseClient, 'from' | 'rpc' | 'storage' | 'functions'>
 type Row = Record<string, unknown>
 
 export const MASTER_IMPORT_SOURCE_SCOPE_KEY = 'WORKBOOK'
@@ -22,6 +22,25 @@ export interface SavedImportBatch {
   errorCount: number
   deferredCount: number
   createdBy: string | null
+  sourceFileId: string | null
+  sourceHashVerification: 'CLIENT_OBSERVED' | 'SERVER_VERIFIED'
+  sourceHash: string
+  parserVersion: string
+}
+
+export interface SavedImportSource {
+  id: string
+  originalFilename: string
+  verificationStatus: 'PENDING_UPLOAD' | 'VERIFIED' | 'HASH_MISMATCH' | 'VERIFICATION_FAILED'
+  serverSha256: string | null
+  serverByteSize: number | null
+  verifiedAt: string | null
+}
+
+export interface VerifiedImportSource {
+  id: string
+  serverSha256: string
+  serverByteSize: number
 }
 
 export interface SavedImportIssue {
@@ -77,7 +96,10 @@ export interface SavedRawImportRow {
 }
 
 export interface ImportPersistence {
-  saveMasterDryRun(preview: MasterImportPreview, hash: string): Promise<string>
+  prepareSourceFile(file: File, hash: string, onStage?: (stage: 'UPLOADING' | 'VERIFYING') => void): Promise<VerifiedImportSource>
+  saveMasterDryRun(preview: MasterImportPreview, sourceFileId: string, hash: string): Promise<string>
+  loadSourceFile(sourceFileId: string): Promise<SavedImportSource>
+  createSourceDownloadUrl(sourceFileId: string): Promise<string>
   listSavedMasterImports(): Promise<SavedImportBatch[]>
   loadSavedImportIssues(batchId: string): Promise<SavedImportIssue[]>
   loadSavedImportCandidates(batchId: string): Promise<SavedImportCandidate[]>
@@ -175,6 +197,10 @@ function mapBatch(row: Row, workspaceId: string): SavedImportBatch {
     bomCount: count(row, 'bom_candidate_count'), validCount: count(row, 'valid_count'),
     warningCount: count(row, 'warning_count'), errorCount: count(row, 'error_count'),
     deferredCount: count(row, 'deferred_count'), createdBy: optionalField(row, 'created_by'),
+    sourceFileId: row.source_file_id == null ? null : field(row, 'source_file_id'),
+    sourceHashVerification: row.source_hash_verification === 'SERVER_VERIFIED' ? 'SERVER_VERIFIED' : 'CLIENT_OBSERVED',
+    sourceHash: typeof row.source_file_hash === 'string' ? row.source_file_hash : '',
+    parserVersion: typeof row.parser_version === 'string' ? row.parser_version : '',
   }
 }
 
@@ -361,21 +387,102 @@ export function createImportPersistence({ supabase, workspaceId }: {
 }): ImportPersistence {
   if (!workspaceId.trim()) throw new ImportPersistenceError('워크스페이스를 선택해 주세요.')
   return {
-    async saveMasterDryRun(preview, hash) {
+    async prepareSourceFile(file, hash, onStage) {
+      if (!file.name || file.name.length > 255 || !/\.xlsx$/i.test(file.name) || /[/\\]/.test(file.name) ||
+        Array.from(file.name).some(character => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127) ||
+        !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 52428800 || !/^[0-9a-f]{64}$/.test(hash)) {
+        throw new ImportPersistenceError('원본 파일 이름, 크기 또는 SHA-256 값이 올바르지 않습니다.')
+      }
+      try {
+        const { data: rows, error: registrationError } = await supabase.rpc('register_master_import_source', {
+          p_workspace_id: workspaceId,
+          p_original_filename: file.name,
+          p_client_observed_byte_size: file.size,
+          p_client_observed_sha256: hash,
+        })
+        if (registrationError) throw registrationError
+        const registration = asRows(rows)[0]
+        if (!registration) throw new Error('Missing source registration')
+        const id = field(registration, 'source_file_id')
+        const bucket = field(registration, 'bucket')
+        const path = field(registration, 'object_path')
+        if (bucket !== 'seller-audit-import-sources' || path !== `${workspaceId}/${id}/source.xlsx`) {
+          throw new Error('Unexpected source path')
+        }
+        onStage?.('UPLOADING')
+        const { error: uploadError } = await supabase.storage.from(bucket).upload(path, file, {
+          contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', upsert: false,
+        })
+        if (uploadError) throw uploadError
+        onStage?.('VERIFYING')
+        const { data: verification, error: verifyError } = await supabase.functions.invoke('verify-master-import-source', {
+          body: { sourceFileId: id },
+        })
+        if (verifyError) throw verifyError
+        if (!isRow(verification) || verification.status !== 'VERIFIED' ||
+          verification.sourceFileId !== id || verification.serverSha256 !== hash ||
+          verification.serverByteSize !== file.size) {
+          throw new ImportPersistenceError(verification && isRow(verification) && verification.status === 'HASH_MISMATCH'
+            ? '업로드된 원본 파일의 서버 검증값이 브라우저에서 계산한 값과 일치하지 않습니다.'
+            : '원본 파일을 서버에서 확인하지 못했습니다. 다시 검증하거나 새로 업로드해 주세요.')
+        }
+        return { id, serverSha256: hash, serverByteSize: file.size }
+      } catch (error) {
+        if (error instanceof ImportPersistenceError) throw error
+        throw normalizeError(error, '원본 등록·업로드·서버 검증에 실패했습니다.')
+      }
+    },
+    async saveMasterDryRun(preview, sourceFileId, hash) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(sourceFileId)) {
+        throw new ImportPersistenceError('서버 검증된 원본 ID가 필요합니다.')
+      }
       const payload = buildMasterImportPayload(preview, hash)
       try {
-        const { data, error } = await supabase.rpc('persist_master_import_dry_run', {
-          p_workspace_id: workspaceId, ...payload,
+        const { data, error } = await supabase.rpc('persist_verified_master_import_dry_run', {
+          p_workspace_id: workspaceId, p_source_file_id: sourceFileId,
+          p_summary: payload.p_summary, p_raw_rows: payload.p_raw_rows,
+          p_candidates: payload.p_candidates, p_issues: payload.p_issues,
         })
         if (error) throw error
         if (typeof data !== 'string' || !data.trim()) throw new Error('Invalid batch id')
         return data
       } catch (error) { throw normalizeError(error, 'Dry-run 저장에 실패했습니다.') }
     },
+    async loadSourceFile(sourceFileId) {
+      try {
+        const { data, error } = await supabase.from('import_source_files')
+          .select('id,workspace_id,original_filename,verification_status,server_verified_sha256,server_verified_byte_size,verified_at')
+          .eq('workspace_id', workspaceId).eq('id', sourceFileId).single()
+        if (error || !isRow(data)) throw error ?? new Error('Source file missing')
+        validateWorkspace(data, workspaceId)
+        const status = field(data, 'verification_status')
+        if (!['PENDING_UPLOAD', 'VERIFIED', 'HASH_MISMATCH', 'VERIFICATION_FAILED'].includes(status)) {
+          throw new Error('Invalid verification status')
+        }
+        return {
+          id: field(data, 'id'), originalFilename: field(data, 'original_filename'),
+          verificationStatus: status as SavedImportSource['verificationStatus'],
+          serverSha256: optionalText(data, 'server_verified_sha256'),
+          serverByteSize: data.server_verified_byte_size === null ? null : count(data, 'server_verified_byte_size'),
+          verifiedAt: optionalTimestamp(data, 'verified_at'),
+        }
+      } catch (error) { throw normalizeError(error, '원본 파일 정보를 불러오지 못했습니다.') }
+    },
+    async createSourceDownloadUrl(sourceFileId) {
+      try {
+        const { data, error } = await supabase.functions.invoke('create-master-source-download-url', {
+          body: { sourceFileId },
+        })
+        if (error || !isRow(data) || typeof data.url !== 'string' || !data.url.startsWith('https://')) {
+          throw error ?? new Error('Download URL missing')
+        }
+        return data.url
+      } catch (error) { throw normalizeError(error, '원본 파일 다운로드 링크를 만들지 못했습니다.') }
+    },
     async listSavedMasterImports() {
       try {
         const { data, error } = await supabase.from('import_batches')
-          .select('id,workspace_id,source_type,source_filename,created_at,status,validation_revision,row_count,product_candidate_count,sku_candidate_count,bom_candidate_count,valid_count,warning_count,error_count,deferred_count,created_by')
+          .select('id,workspace_id,source_type,source_filename,source_file_hash,source_file_id,source_hash_verification,parser_version,created_at,status,validation_revision,row_count,product_candidate_count,sku_candidate_count,bom_candidate_count,valid_count,warning_count,error_count,deferred_count,created_by')
           .eq('workspace_id', workspaceId).eq('source_type', 'MASTER_WORKBOOK')
           .order('created_at', { ascending: false }).limit(20)
         if (error) throw error

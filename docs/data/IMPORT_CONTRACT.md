@@ -166,7 +166,7 @@ grain은 `source_surface(sheet) + reporting_date + media_type`의 **값 있는 �
 
 ## 18. Workspace Isolation
 
-Batch, Raw, Issue, 후보, preview, 적용 대상, 원본 객체 metadata와 ActivityLog는 `workspace_id`를 가진다. Batch→Raw→Issue/Fact 및 Product/SKU/BOM·Channel/Offer FK는 동일 Workspace 복합 키로 묶고 RLS+GRANT로 행 접근을 제한한다. source hash가 같아도 Workspace 간 합치지 않는다. 파일 객체 경로는 `(workspace_id, batch_id, opaque object key)`로 격리하되 **경로 자체는 권한 근거가 아니다**. Storage의 private bucket에도 별도 RLS/서버 검사로 현재 ACTIVE 멤버십과 Role을 적용한다. RLS가 없는 exposed table/view 또는 private 객체 공개 URL로 우회하지 않는다.
+Batch, Raw, Issue, 후보, preview, 적용 대상, 원본 객체 metadata와 ActivityLog는 `workspace_id`를 가진다. Batch→Raw→Issue/Fact 및 Product/SKU/BOM·Channel/Offer FK는 동일 Workspace 복합 키로 묶고 RLS+GRANT로 행 접근을 제한한다. source hash가 같아도 Workspace 간 합치지 않는다. 5F Master 원본 객체 경로는 `<workspace_uuid>/<source_file_uuid>/source.xlsx`로 격리하되 **경로 자체는 권한 근거가 아니다**. Storage의 private bucket에도 별도 RLS/서버 검사로 현재 ACTIVE 멤버십과 Role을 적용한다. RLS가 없는 exposed table/view 또는 private 객체 공개 URL로 우회하지 않는다.
 
 ## 19. Activity Logging
 
@@ -174,9 +174,9 @@ Batch, Raw, Issue, 후보, preview, 적용 대상, 원본 객체 metadata와 Act
 
 ## 20. File Storage / Retention
 
-**후속 목표는 Option B다.** 원본 Excel/CSV binary는 접근 제한된 암호화 **private Object Storage**, DB는 file metadata/SHA-256/immutable Raw 행을 보유한다. 현재 5E는 원본 binary를 DB나 Storage에 저장하지 않으며 브라우저가 계산한 **client-observed SHA-256**만 Batch에 기록한다. 서버가 byte stream을 다시 hash하지 않으므로 이 값을 server-verified hash 또는 Apply 신뢰 근거로 취급하지 않는다. Option A의 원본 binary 보관만으로는 행별 provenance·검증 이력 조회 계약이 완성되지 않고, Option C처럼 binary를 버리면 parser 재현·수식/서식·행외 metadata 검증이 불가능하다. 후속 Storage 단계에서는 신뢰된 서버가 **저장된 byte stream**에서 SHA-256을 계산·검증하고 객체 version/byte size/고유 key를 Batch에 묶는다. 같은 key overwrite를 허용하지 않는다. Apply 직전 객체 version·size·hash가 Batch metadata와 같은지 재검증한다(객체 version을 제공하지 않는 Storage라면 byte stream을 다시 해시). 클라이언트 제공 hash/filename은 권한 또는 멱등성의 근거가 아니다. Original/Raw/Applied Fact/ActivityLog는 서로 다른 보존 정책 대상이다. 파일럿에서는 임의 자동 삭제를 기본으로 하지 않고 접근·백업·복구 담당자 및 retention을 운영 전에 정한다. SaaS의 기간·삭제/export 비용은 별도 정책으로 확정한다. DB 백업은 Storage 객체를 포함하지 않으므로 별도 백업과 복원 리허설이 필요하다.
+5F Master Workbook은 private Object Storage에 원본 `.xlsx`를 저장하고 DB에 SourceFile metadata, client-observed 값, **서버가 저장된 byte에서 다시 계산한** SHA-256/크기를 기록한다. 새 Batch는 `SERVER_VERIFIED` SourceFile만 참조한다. Barcode/Channel/Sales/Marketing 파일은 아직 구현 범위가 아니다. 같은 key overwrite는 브라우저에 허용하지 않는다. Apply 직전 객체 version·size·hash 재확인은 후속 단계 계약이며 현재 Apply는 없다. 클라이언트 제공 hash/filename은 권한 또는 멱등성의 근거가 아니다. Original/Raw/Applied Fact/ActivityLog는 서로 다른 보존 정책 대상이다. 파일럿에서는 임의 자동 삭제를 기본으로 하지 않고 접근·백업·복구 담당자 및 retention을 운영 전에 정한다. DB 백업은 Storage 객체를 포함하지 않으므로 별도 백업과 복원 리허설이 필요하다. [5F 원본 계약](IMPORT_SOURCE_STORAGE.md)을 참고한다.
 
-후속 Storage 구현에서 Object Storage와 DB는 하나의 ACID 트랜잭션이 아니다. 객체 업로드·hash 검증 후 Batch/Raw metadata를 commit하고, DB 실패로 참조되지 않은 객체는 제한된 관리자 정리 절차에서 확인해 제거한다. 반대로 DB에 참조만 있고 객체가 없으면 batch를 완료하지 않고 재업로드/복구한다. 백업 복원에서도 metadata와 실제 객체의 hash를 대조한다.
+Object Storage와 DB는 하나의 ACID 트랜잭션이 아니다. 현재 5F는 등록→업로드→서버 검증→Batch 저장 순서로 진행하며, 중간 실패 시 남은 등록/객체는 정확한 ID와 path를 대조한 관리자 정리 대상이다. 자동 삭제는 없다. 백업 복원에서도 metadata와 실제 객체의 hash를 대조해야 한다.
 
 원본에 미래 개인정보가 들어올 수 있으므로 수집 필드 최소화, Raw 접근 제한/암호화, 감사 가능성과 삭제 요청의 균형을 검토한다. 운영 로그·일반 UI 응답은 민감 필드를 마스킹하되 immutable Raw를 조용히 변형하고 완전한 원본이라고 주장하지 않는다. 민감 원본의 보관/삭제는 별도 정책을 확정한다. 앱 로그/ActivityLog에 전체 Raw 행, 파일 binary, Auth token/password/service key를 출력하지 않는다. private 객체 다운로드는 권한을 재검증한 인증 경로나 짧은 만료의 URL만 사용한다. 브라우저에 `service_role`을 넣지 않는다. [Supabase Storage access control](https://supabase.com/docs/guides/storage/security/access-control), [private bucket](https://supabase.com/docs/guides/storage/buckets/fundamentals), [DB backups](https://supabase.com/docs/guides/platform/backups)를 구현 시 다시 확인한다.
 
@@ -186,7 +186,7 @@ Parser/Schema 오류는 user-correctable source 문제와 기술 실패를 구�
 
 ## 22. Retry / Revalidation
 
-일시 Storage/DB 실패는 동일 batch/revision을 안전하게 재시도한다. `DUPLICATE_BUSINESS_KEY`, `UNKNOWN_SKU`, `SOURCE_SCHEMA_MISMATCH`는 자동 retry로 해결되지 않는다. 원본 수정 또는 reviewed override 후 새 validation revision을 만들고 모든 issue·preview·승인 유효성을 다시 계산한다. Parser 변경은 같은 binary를 새 parser version의 별도 batch로 재검증하고 이전 Raw/결정 이력은 보존한다. 이미 적용된 source identity는 parser가 바뀌어도 재적용되지 않는다. Fact 부분 적용은 commit된 source-row key를 재조회해 미적용 chunk만 resume한다. 승인자 권한이 회수되었다면 과거 승인을 근거로 Apply하지 않는다.
+5F에서는 검증 실패 원인을 확인한 뒤 서버 검증을 재시도할 수 있으나 hash mismatch 또는 원본 byte 변경은 새 SourceFile과 새 Batch가 필요하다. 같은 source hash·parser version·validation revision에서만 현재 Review 근거를 유지한다. Parser 변경 시 새 Batch가 필요하고 향후 재검증 결과에 이전 Review를 자동 이월하지 않는다. validation revision 2 생성, 승인, Apply, 부분 적용 resume은 아직 구현하지 않았다. `DUPLICATE_BUSINESS_KEY`, `UNKNOWN_SKU`, `SOURCE_SCHEMA_MISMATCH`는 자동 retry로 해결되지 않는다.
 
 ## 23. Schema Drift
 
