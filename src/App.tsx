@@ -56,7 +56,7 @@ function WorkspaceView({ data, repository, onData, access, importPersistence }: 
   else if (path === '/channels') page = <ChannelMatrix data={data} />
   else if (path === '/mapping') page = <MappingCenter data={data} onMap={onMap} readOnly={!editable} showDemoRecommendations={!access} />
   else if (path === '/audit') page = <AuditCenter key={route} data={data} onUpdateIssue={onUpdateIssue} readOnly={!editable} />
-  else if (path === '/import/master' && editable) page = <MasterImport persistence={importPersistence} />
+  else if (path === '/import/master' && editable) page = <MasterImport persistence={importPersistence} role={access?.role === 'EDITOR' ? 'EDITOR' : 'ADMIN'} />
   else if (path === '/import/master') page = <><PageHeader title="접근할 수 없습니다" description="이 워크스페이스에서는 데이터 가져오기를 실행할 수 없습니다." /><div className="panel"><EmptyState title="읽기 전용 계정입니다" /></div></>
   else if (path === '/settings/channels' || path === '/settings/workspace') page = <Settings data={data} section={path.split('/')[2]} mode={access?.mode ?? 'mock'} />
   else page = <><PageHeader title="페이지를 찾을 수 없습니다" description="주소를 확인하거나 대시보드로 이동해 주세요." /><div className="panel"><EmptyState title="요청한 페이지가 없습니다" action={<a className="button button-primary" href="#/dashboard">대시보드로 이동</a>} /></div></>

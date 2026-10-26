@@ -6,10 +6,14 @@ type WorkspaceFixture = { id: string; name: string; role: Role; productName?: st
 type ImportFixture = {
   batches: Array<Record<string, unknown>>
   issuesByBatch?: Record<string, Array<Record<string, unknown>>>
+  candidatesByBatch?: Record<string, Array<Record<string, unknown>>>
   rawRowsById?: Record<string, Record<string, unknown>>
   rpcError?: string
   rpcGate?: Promise<void>
+  candidateReviewGate?: Promise<void>
   rawReads?: { count: number }
+  candidateReviews?: Array<Record<string, unknown>>
+  issueReviews?: Array<Record<string, unknown>>
 }
 
 const user = {
@@ -64,17 +68,64 @@ async function installFakeSupabase(page: Page, workspaces: WorkspaceFixture[], i
       const payload = request.postDataJSON() as Record<string, unknown>
       const summary = payload.p_summary as Record<string, number>
       const rawRows = payload.p_raw_rows as unknown[]
+      const candidates = payload.p_candidates as Array<Record<string, unknown>>
       const batchId = `batch-${imports.batches.length + 1}`
       imports.batches.unshift({
         id: batchId, workspace_id: payload.p_workspace_id, source_type: 'MASTER_WORKBOOK',
         source_filename: payload.p_source_filename, created_at: '2026-10-25T09:00:00.000Z',
-        status: 'REVIEW_REQUIRED', row_count: rawRows.length,
+        status: 'REVIEW_REQUIRED', validation_revision: 1, row_count: rawRows.length,
         product_candidate_count: summary.productCount, sku_candidate_count: summary.skuCount,
         bom_candidate_count: summary.bomCount, valid_count: summary.validCount,
         warning_count: summary.warningCount, error_count: summary.errorCount,
         deferred_count: summary.deferredCount, created_by: user.id,
       })
+      imports.candidatesByBatch ??= {}
+      imports.candidatesByBatch[batchId] = candidates.map((candidate, index) => ({
+        id: `candidate-${batchId}-${index + 1}`, workspace_id: payload.p_workspace_id,
+        import_batch_id: batchId, raw_import_row_id: `raw-${index + 1}`, supporting_raw_row_ids: [],
+        validation_revision: 1, candidate_ordinal: candidate.candidateOrdinal,
+        kind: candidate.kind, source_sheet: candidate.sourceSheet, source_row: candidate.sourceRow,
+        source_block: candidate.sourceBlock, source_field_map: candidate.sourceFieldMap,
+        normalized_values: candidate.normalizedValues, candidate_status: candidate.status,
+        issue_codes: candidate.issueCodes, reviewed_values: null, review_note: null,
+        review_revision: 0, reviewed_by: null, reviewed_at: null,
+      }))
       return json(route, batchId)
+    }
+    if (table === 'rpc/review_import_candidate') {
+      if (imports.candidateReviewGate) await imports.candidateReviewGate
+      const payload = request.postDataJSON() as Record<string, unknown>
+      const candidate = Object.values(imports.candidatesByBatch ?? {}).flat()
+        .find(row => row.id === payload.p_candidate_id)
+      if (!candidate) return json(route, { message: 'candidate not found' }, 404)
+      if (candidate.validation_revision !== payload.p_expected_validation_revision ||
+        candidate.review_revision !== payload.p_expected_review_revision) {
+        return json(route, { message: 'stale candidate review' }, 409)
+      }
+      candidate.reviewed_values = payload.p_reviewed_values
+      candidate.review_note = payload.p_resolution
+      candidate.review_revision = Number(candidate.review_revision) + 1
+      candidate.reviewed_by = user.id
+      candidate.reviewed_at = '2026-10-25T10:00:00.000Z'
+      imports.candidateReviews?.push(payload)
+      return json(route, null)
+    }
+    if (table === 'rpc/review_import_validation_issue') {
+      const payload = request.postDataJSON() as Record<string, unknown>
+      const issue = Object.values(imports.issuesByBatch ?? {}).flat()
+        .find(row => row.id === payload.p_issue_id)
+      if (!issue) return json(route, { message: 'issue not found' }, 404)
+      if (issue.validation_revision !== payload.p_expected_validation_revision ||
+        issue.review_revision !== payload.p_expected_review_revision) {
+        return json(route, { message: 'stale issue review' }, 409)
+      }
+      issue.status = payload.p_status
+      issue.resolution = payload.p_resolution
+      issue.review_revision = Number(issue.review_revision) + 1
+      issue.reviewed_by = user.id
+      issue.reviewed_at = '2026-10-25T10:00:00.000Z'
+      imports.issueReviews?.push(payload)
+      return json(route, null)
     }
     if (table === 'workspace_members') {
       return json(route, workspaces.map(workspace => ({ workspace_id: workspace.id, role: workspace.role, status: 'ACTIVE' })))
@@ -104,6 +155,10 @@ async function installFakeSupabase(page: Page, workspaces: WorkspaceFixture[], i
     if (table === 'import_validation_issues') {
       const batchId = selected(url, 'import_batch_id')
       return json(route, batchId ? imports.issuesByBatch?.[batchId] ?? [] : [])
+    }
+    if (table === 'import_candidates') {
+      const batchId = selected(url, 'import_batch_id')
+      return json(route, batchId ? imports.candidatesByBatch?.[batchId] ?? [] : [])
     }
     if (table === 'raw_import_rows') {
       if (imports.rawReads) imports.rawReads.count += 1
@@ -152,6 +207,60 @@ async function analyzeFixture(page: Page, fileName = 'sanitized-master.xlsx') {
   })
   await page.getByRole('button', { name: '분석 시작' }).click()
   await expect(page.getByText('Master 분석 결과')).toBeVisible()
+}
+
+function savedReviewFixture(): ImportFixture {
+  const batchId = 'batch-review'
+  const rawRowId = 'raw-100526'
+  return {
+    batches: [{
+      id: batchId, workspace_id: 'workspace-a', source_type: 'MASTER_WORKBOOK',
+      source_filename: 'review-master.xlsx', created_at: '2026-10-25T08:30:00.000Z',
+      status: 'REVIEW_REQUIRED', validation_revision: 1, row_count: 1,
+      product_candidate_count: 1, sku_candidate_count: 0, bom_candidate_count: 0,
+      valid_count: 0, warning_count: 0, error_count: 1, deferred_count: 0, created_by: user.id,
+    }],
+    candidatesByBatch: {
+      [batchId]: [{
+        id: 'candidate-100526', workspace_id: 'workspace-a', import_batch_id: batchId,
+        raw_import_row_id: rawRowId, supporting_raw_row_ids: [], validation_revision: 1,
+        candidate_ordinal: 1, kind: 'PRODUCT', source_sheet: '단가표', source_row: 6,
+        source_block: 'PRICE_TABLE', source_field_map: { sabangnetCode: 'B6', productName: 'E6' },
+        normalized_values: {
+          sabangnetCode: '100526', productName: '충돌 상품', category: '냉동용기',
+          productType: '단품', rawBomText: 'AL00 1개', sourceQuantity: 1,
+          sourceChannel: '쿠팡', variantOfSourceRow: null,
+        },
+        candidate_status: 'ERROR', issue_codes: ['DUPLICATE_BUSINESS_KEY'],
+        reviewed_values: null, review_note: null, review_revision: 0,
+        reviewed_by: null, reviewed_at: null,
+      }],
+    },
+    issuesByBatch: {
+      [batchId]: [{
+        id: 'issue-duplicate', workspace_id: 'workspace-a', import_batch_id: batchId,
+        raw_import_row_id: rawRowId, related_raw_row_ids: [rawRowId],
+        validation_revision: 1, review_revision: 0,
+        issue_code: 'DUPLICATE_BUSINESS_KEY', severity: 'ERROR', blocking_scope: 'CANDIDATE',
+        source_sheet: '단가표', source_row: 6, field_path: 'sabangnetCode',
+        observed_value: '100526', expected_rule: '사방넷 품번은 한 상품을 식별해야 합니다.',
+        message: '사방넷 품번 100526이 중복되었습니다.', status: 'OPEN', resolution: null,
+        reviewed_by: null, reviewed_at: null,
+      }],
+    },
+    rawRowsById: {
+      [rawRowId]: {
+        id: rawRowId, workspace_id: 'workspace-a', source_sheet: '단가표',
+        original_row_number: 6, source_block: 'PRICE_TABLE', raw_cells: [{
+          address: 'B6', originalType: 'STRING', originalValue: '100526',
+          formulaText: null, cachedValue: null, errorCode: null,
+        }],
+      },
+    },
+    candidateReviews: [],
+    issueReviews: [],
+    rawReads: { count: 0 },
+  }
 }
 
 test('shows the login gate when no Supabase session exists', async ({ page }) => {
@@ -235,6 +344,11 @@ for (const role of ['ADMIN', 'EDITOR'] as const) {
     await expect(savePanel.getByRole('button', { name: '저장 완료' })).toBeDisabled()
     await expect(page.getByRole('region', { name: '최근 저장된 Master 검증' })).toContainText(`${role.toLowerCase()}-master.xlsx`)
     expect(imports.batches).toHaveLength(1)
+    const persistedCandidates = imports.candidatesByBatch?.['batch-1'] ?? []
+    expect(persistedCandidates).toHaveLength(8)
+    expect(persistedCandidates.filter(candidate => candidate.kind === 'PRODUCT')).toHaveLength(3)
+    expect(persistedCandidates.filter(candidate => candidate.kind === 'SKU')).toHaveLength(2)
+    expect(persistedCandidates.filter(candidate => candidate.kind === 'BOM_COMPONENT')).toHaveLength(3)
   })
 }
 
@@ -272,7 +386,157 @@ test('an old save cannot mark a newly analyzed preview as saved', async ({ page 
   expect(imports.batches).toHaveLength(1)
 })
 
-test('opens a shared saved issue and fetches its raw row only on demand', async ({ page }) => {
+test('ADMIN can review a saved candidate while preserving the parser value', async ({ page }) => {
+  const imports = savedReviewFixture()
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Review Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+
+  const detail = page.getByRole('region', { name: '저장된 Batch 상세' })
+  await expect(detail.getByRole('heading', { name: '저장된 후보' })).toBeVisible()
+  expect(imports.rawReads?.count).toBe(0)
+  await detail.getByRole('button', { name: '후보 상세' }).click()
+
+  const drawer = page.getByRole('dialog')
+  await expect(drawer.getByRole('heading', { name: '원본 증거' })).toBeVisible()
+  await expect.poll(() => imports.rawReads?.count).toBe(1)
+  await expect(drawer.getByRole('heading', { name: 'Parser 정규화 값' })).toBeVisible()
+  const parserValues = drawer.getByRole('heading', { name: 'Parser 정규화 값' }).locator('..')
+  await expect(parserValues.getByText('100526', { exact: true })).toBeVisible()
+  await drawer.getByRole('textbox', { name: '사방넷 품번', exact: true }).fill('100999')
+  await drawer.getByLabel('검토 근거').fill('원본 소유자 확인 완료')
+  await drawer.getByRole('button', { name: '검토 저장' }).click()
+
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  await expect(detail.getByText('검토됨 · r1')).toBeVisible()
+  expect(imports.candidateReviews).toEqual([expect.objectContaining({
+    p_candidate_id: 'candidate-100526', p_expected_validation_revision: 1,
+    p_expected_review_revision: 0, p_reviewed_values: { sabangnetCode: '100999' },
+    p_resolution: '원본 소유자 확인 완료',
+  })])
+
+  await detail.getByRole('button', { name: '후보 상세' }).click()
+  const reopenedDrawer = page.getByRole('dialog')
+  const reopenedParserValues = reopenedDrawer.getByRole('heading', { name: 'Parser 정규화 값' }).locator('..')
+  await expect(reopenedParserValues.getByText('100526', { exact: true })).toBeVisible()
+  await expect(reopenedDrawer.getByRole('textbox', { name: '사방넷 품번', exact: true })).toHaveValue('100999')
+})
+
+test('ADMIN keeps explicit null override when saving another reviewed field', async ({ page }) => {
+  const imports = savedReviewFixture()
+  const candidate = imports.candidatesByBatch?.['batch-review']?.[0]
+  if (!candidate) throw new Error('missing review fixture')
+  candidate.reviewed_values = { category: null }
+  candidate.review_note = '기존 검토 근거'
+  candidate.review_revision = 1
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Review Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  await page.getByRole('region', { name: '저장된 Batch 상세' }).getByRole('button', { name: '후보 상세' }).click()
+  const drawer = page.getByRole('dialog')
+  await expect(drawer.getByLabel('카테고리 검토 방식')).toHaveValue('clear')
+  await drawer.getByRole('textbox', { name: '상품명', exact: true }).fill('확인된 상품명')
+  await drawer.getByLabel('검토 근거').fill('원본 소유자 확인 완료')
+  await drawer.getByRole('button', { name: '검토 저장' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(imports.candidateReviews).toEqual([expect.objectContaining({
+    p_reviewed_values: { productName: '확인된 상품명', category: null },
+    p_expected_review_revision: 1,
+  })])
+})
+
+test('ADMIN can explicitly clear an optional reviewed field', async ({ page }) => {
+  const imports = savedReviewFixture()
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Review Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  await page.getByRole('region', { name: '저장된 Batch 상세' }).getByRole('button', { name: '후보 상세' }).click()
+  const drawer = page.getByRole('dialog')
+  await drawer.getByLabel('카테고리 검토 방식').selectOption('clear')
+  await drawer.getByLabel('검토 근거').fill('공식 원본에 카테고리 값 없음')
+  await drawer.getByRole('button', { name: '검토 저장' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  expect(imports.candidateReviews).toEqual([expect.objectContaining({ p_reviewed_values: { category: null } })])
+})
+
+test('a save from a previous batch cannot replace the newly selected batch details', async ({ page }) => {
+  const imports = savedReviewFixture()
+  let releaseReview!: () => void
+  imports.candidateReviewGate = new Promise<void>(resolve => { releaseReview = resolve })
+  const secondBatch = { ...imports.batches[0], id: 'batch-second', source_filename: 'second-master.xlsx' }
+  const secondCandidate = { ...imports.candidatesByBatch?.['batch-review']?.[0], id: 'candidate-second', import_batch_id: 'batch-second', normalized_values: {
+    sabangnetCode: '200000', productName: '두 번째 상품', category: null, productType: '단품', rawBomText: null,
+    sourceQuantity: null, sourceChannel: null, variantOfSourceRow: null,
+  } }
+  imports.batches.push(secondBatch)
+  imports.candidatesByBatch!['batch-second'] = [secondCandidate]
+  imports.issuesByBatch!['batch-second'] = []
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Review Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  await page.getByRole('region', { name: '저장된 Batch 상세' }).getByRole('button', { name: '후보 상세' }).click()
+  const drawer = page.getByRole('dialog')
+  await drawer.getByRole('textbox', { name: '사방넷 품번', exact: true }).fill('100999')
+  await drawer.getByLabel('검토 근거').fill('원본 확인')
+  await drawer.getByRole('button', { name: '검토 저장' }).click()
+  await expect(drawer.getByRole('button', { name: '저장 중…' })).toBeDisabled()
+  await drawer.getByRole('button', { name: '닫기' }).click()
+  await page.getByRole('button', { name: 'second-master.xlsx 배치 상세 보기' }).click()
+  const detail = page.getByRole('region', { name: '저장된 Batch 상세' })
+  await expect(detail).toContainText('Batch ID: batch-second')
+  await expect(detail).toContainText('두 번째 상품')
+  releaseReview()
+  await expect.poll(() => imports.candidateReviews?.length).toBe(1)
+  await expect(detail).toContainText('Batch ID: batch-second')
+  await expect(detail).toContainText('두 번째 상품')
+  await expect(detail).not.toContainText('충돌 상품')
+})
+
+test('ADMIN can record an issue resolution without changing the batch lifecycle', async ({ page }) => {
+  const imports = savedReviewFixture()
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Review Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  await page.getByRole('region', { name: '저장된 Batch 상세' }).getByRole('button', { name: '이슈 상세' }).click()
+
+  const drawer = page.getByRole('dialog')
+  await drawer.getByLabel('처리 상태').selectOption('RESOLVED')
+  await drawer.getByLabel('처리 근거 (필수)').fill('공식 원본에서 중복 품번을 확인함')
+  await drawer.getByRole('button', { name: '이슈 결정 저장' }).click()
+
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+  const detail = page.getByRole('region', { name: '저장된 Batch 상세' })
+  await expect(detail.getByText('해결', { exact: true })).toBeVisible()
+  await expect(detail.getByText('REVIEW_REQUIRED', { exact: true })).toBeVisible()
+  expect(imports.issueReviews).toEqual([expect.objectContaining({
+    p_issue_id: 'issue-duplicate', p_expected_validation_revision: 1,
+    p_expected_review_revision: 0, p_status: 'RESOLVED',
+    p_resolution: '공식 원본에서 중복 품번을 확인함',
+  })])
+})
+
+test('EDITOR can inspect candidate evidence but cannot edit reviews', async ({ page }) => {
+  const imports = savedReviewFixture()
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Review Workspace', role: 'EDITOR' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  await page.getByRole('region', { name: '저장된 Batch 상세' }).getByRole('button', { name: '후보 상세' }).click()
+
+  const drawer = page.getByRole('dialog')
+  await expect(drawer.getByText('EDITOR는 검토 내용을 조회할 수 있으며 변경할 수 없습니다.')).toBeVisible()
+  const parserValues = drawer.getByRole('heading', { name: 'Parser 정규화 값' }).locator('..')
+  await expect(parserValues.getByText('100526', { exact: true })).toBeVisible()
+  await expect(drawer.getByRole('button', { name: '검토 저장' })).toHaveCount(0)
+  await expect(drawer.getByLabel('사방넷 품번')).toHaveCount(0)
+})
+
+test('shows the snapshot unavailable notice for a legacy batch without candidates', async ({ page }) => {
   const rawReads = { count: 0 }
   const batchId = 'batch-shared'
   const rawRowId = 'raw-100526'
@@ -280,7 +544,7 @@ test('opens a shared saved issue and fetches its raw row only on demand', async 
     batches: [{
       id: batchId, workspace_id: 'workspace-a', source_type: 'MASTER_WORKBOOK',
       source_filename: 'shared-master.xlsx', created_at: '2026-10-25T08:30:00.000Z',
-      status: 'REVIEW_REQUIRED', row_count: 3, product_candidate_count: 3,
+      status: 'REVIEW_REQUIRED', validation_revision: 1, row_count: 3, product_candidate_count: 3,
       sku_candidate_count: 2, bom_candidate_count: 3, valid_count: 3,
       warning_count: 0, error_count: 5, deferred_count: 0, created_by: user.id,
     }],
@@ -288,10 +552,12 @@ test('opens a shared saved issue and fetches its raw row only on demand', async 
       [batchId]: [{
         id: 'issue-duplicate', workspace_id: 'workspace-a', import_batch_id: batchId,
         raw_import_row_id: rawRowId, related_raw_row_ids: [rawRowId],
+        validation_revision: 1, review_revision: 0,
         issue_code: 'DUPLICATE_BUSINESS_KEY', severity: 'ERROR', blocking_scope: 'CANDIDATE',
         source_sheet: '단가표', source_row: 6, field_path: 'sabangnetCode',
         observed_value: '100526', expected_rule: '사방넷 품번은 한 상품을 식별해야 합니다.',
-        message: '사방넷 품번 100526이 중복되었습니다.', status: 'OPEN',
+        message: '사방넷 품번 100526이 중복되었습니다.', status: 'OPEN', resolution: null,
+        reviewed_by: null, reviewed_at: null,
       }],
     },
     rawRowsById: {
@@ -315,15 +581,9 @@ test('opens a shared saved issue and fetches its raw row only on demand', async 
   await page.getByRole('button', { name: 'shared-master.xlsx 배치 상세 보기' }).click()
 
   const detail = page.getByRole('region', { name: '저장된 Batch 상세' })
-  await expect(detail).toContainText('DUPLICATE_BUSINESS_KEY')
-  await expect(detail).toContainText('Candidate 전체 Snapshot은 현재 브라우저 Dry-run 세션에서만 제공됩니다.')
-  await expect(detail.getByRole('tab')).toHaveCount(0)
+  await expect(detail).toContainText('Candidate Snapshot이 없는 이전 Batch입니다.')
+  await expect(detail).toContainText('원본 Candidate 상세를 중앙 DB에서 재현할 수 없습니다.')
+  await expect(detail.getByRole('button', { name: '후보 상세' })).toHaveCount(0)
   await expect(detail.getByRole('button', { name: /적용|Apply/i })).toHaveCount(0)
   expect(rawReads.count).toBe(0)
-
-  await page.getByRole('button', { name: 'DUPLICATE_BUSINESS_KEY 원본 상세' }).click()
-  await expect(page.getByRole('dialog')).toContainText('저장된 원본 행')
-  await expect(page.getByRole('dialog')).toContainText('#REF!')
-  await expect(page.getByRole('dialog')).toContainText('수식: =A1/B1')
-  expect(rawReads.count).toBe(1)
 })

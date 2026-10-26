@@ -34,6 +34,7 @@ function preview(): MasterImportPreview {
 function batchRow(overrides: Record<string, unknown> = {}) {
   return { id: batchId, workspace_id: workspaceId, source_type: 'MASTER_WORKBOOK',
     source_filename: '원본.xlsx', created_at: '2026-10-25T00:00:00Z', status: 'REVIEW_REQUIRED',
+    validation_revision: 1,
     row_count: 1, product_candidate_count: 1, sku_candidate_count: 0, bom_candidate_count: 0,
     valid_count: 0, warning_count: 0, error_count: 1, deferred_count: 0, created_by: 'user-a', ...overrides }
 }
@@ -77,12 +78,19 @@ function fakeClient(tables: Record<string, Record<string, unknown>[]>, rpc: (nam
   return { supabase, calls }
 }
 
-test('maps preview to one atomic payload without candidate snapshots or actor fields', () => {
+test('maps preview to one atomic payload with immutable candidate snapshots and no actor fields', () => {
   const payload = buildMasterImportPayload(preview(), hash)
   expect(payload.p_summary).toEqual({ productCount: 1, skuCount: 0, bomCount: 0,
     validCount: 0, warningCount: 0, errorCount: 1, deferredCount: 0 })
   expect(payload.p_raw_rows).toHaveLength(1)
   expect(payload.p_raw_rows[0].rawCells).toEqual(preview().rawRows[0].rawCells)
+  expect(payload.p_candidates).toEqual([expect.objectContaining({
+    kind: 'PRODUCT', candidateOrdinal: 1, sourceSheet: '단가표', sourceRow: 6,
+    status: 'ERROR', supportingRows: [], normalizedValues: {
+      sabangnetCode: '100526', productName: '중복', category: null, productType: null,
+      rawBomText: null, sourceQuantity: null, sourceChannel: null, variantOfSourceRow: null,
+    },
+  })])
   expect(payload.p_issues).toEqual([expect.objectContaining({
     code: 'DUPLICATE_BUSINESS_KEY', sourceSheet: '단가표', sourceRow: 6,
     observedValue: '100526', relatedRows: [6],
@@ -102,6 +110,41 @@ test('rejects malformed hash, summary, duplicate raw keys, and unmatched issue l
   expect(() => buildMasterImportPayload({ ...base, rawRows: [base.rawRows[0], base.rawRows[0]],
     summary: { ...base.summary, rowCount: 2 } }, hash)).toThrow(/중복/)
   expect(() => buildMasterImportPayload({ ...base, issues: [{ ...base.issues[0], sourceRow: 999 }] }, hash)).toThrow(/원본 행/)
+  expect(() => buildMasterImportPayload({ ...base, products: [{ ...base.products[0], sourceRow: 999 }] }, hash)).toThrow(/후보의 원본 행/)
+  expect(() => buildMasterImportPayload({ ...base, summary: { ...base.summary, errorCount: 0, validCount: 1 } }, hash)).toThrow(/후보 상태별/)
+})
+
+test('candidate ordinals restart per kind and supporting evidence uses a real raw row', () => {
+  const base = preview()
+  const extra = {
+    ...base,
+    rawRows: [
+      ...base.rawRows,
+      { sourceSheet: '단가표', originalRowNumber: 7, sourceBlock: 'PRODUCT', rawCells: [] },
+      { sourceSheet: '코드DB', originalRowNumber: 4, sourceBlock: 'SKU', rawCells: [] },
+    ],
+    products: [{ ...base.products[0], variantOfSourceRow: 7 }],
+    skus: [{ kind: 'SKU' as const, id: 's1', sourceSheet: '코드DB', sourceRow: 4,
+      sourceBlock: 'SKU', sourceFieldMap: {}, status: 'VALID' as const, issueCodes: [],
+      skuCode: 'AL00', modelName: '점보 라벤더', color: '라벤더', sourceCategory: '냉동용기',
+      registryStatus: 'BOM_REGISTRY' as const }],
+    bomComponents: [{ kind: 'BOM_COMPONENT' as const, id: 'b1', sourceSheet: '단가표', sourceRow: 6,
+      sourceBlock: 'PRODUCT', sourceFieldMap: {}, status: 'DEFERRED' as const, issueCodes: [],
+      productCode: '100526', productSourceRow: 6, skuCode: 'AL00', quantity: 1, rawToken: 'AL00 1개' }],
+    summary: { ...base.summary, rowCount: 3, skuCount: 1, bomCount: 1, validCount: 1, deferredCount: 1 },
+  } satisfies MasterImportPreview
+  const candidates = buildMasterImportPayload(extra, hash).p_candidates
+  expect(candidates.map(candidate => [candidate.kind, candidate.candidateOrdinal])).toEqual([
+    ['PRODUCT', 1], ['SKU', 1], ['BOM_COMPONENT', 1],
+  ])
+  expect(candidates[0].supportingRows).toEqual([7])
+  expect(candidates[1].normalizedValues).toEqual({
+    skuCode: 'AL00', modelName: '점보 라벤더', color: '라벤더',
+    sourceCategory: '냉동용기', registryStatus: 'BOM_REGISTRY',
+  })
+  expect(candidates[2].normalizedValues).toEqual({
+    productCode: '100526', productSourceRow: 6, skuCode: 'AL00', quantity: 1, rawToken: 'AL00 1개',
+  })
 })
 
 test('save uses trusted RPC and returns batch id; errors do not leak database detail', async () => {
@@ -123,7 +166,7 @@ test('lists only selected workspace Master batches and maps candidate counts', a
     batchRow({ id: 'foreign', workspace_id: 'workspace-b' })] })
   const saved = await createImportPersistence({ supabase: fake.supabase, workspaceId }).listSavedMasterImports()
   expect(saved).toEqual([{ id: batchId, sourceFilename: '원본.xlsx', createdAt: '2026-10-25T00:00:00Z',
-    status: 'REVIEW_REQUIRED', rowCount: 1, productCount: 1, skuCount: 0, bomCount: 0,
+    status: 'REVIEW_REQUIRED', validationRevision: 1, rowCount: 1, productCount: 1, skuCount: 0, bomCount: 0,
     validCount: 0, warningCount: 0, errorCount: 1, deferredCount: 0, createdBy: 'user-a' }])
 })
 
@@ -133,7 +176,8 @@ test('loads saved issue provenance and raw cells only on explicit detail request
   const issue = { id: 'issue-1', workspace_id: workspaceId, import_batch_id: batchId, raw_import_row_id: raw.id,
     related_raw_row_ids: [raw.id], issue_code: 'DUPLICATE_BUSINESS_KEY', severity: 'ERROR', blocking_scope: 'BATCH',
     source_sheet: '단가표', source_row: 6, field_path: 'sabangnetCode', observed_value: '100526',
-    expected_rule: '고유 품번', message: '중복 품번', status: 'OPEN' }
+    expected_rule: '고유 품번', message: '중복 품번', status: 'OPEN', validation_revision: 1,
+    review_revision: 0, resolution: null, reviewed_by: null, reviewed_at: null }
   const seen: string[] = []
   const fake = fakeClient({ import_batches: [batchRow()], import_validation_issues: [issue], raw_import_rows: [raw] })
   const from = fake.supabase.from.bind(fake.supabase)
@@ -146,6 +190,70 @@ test('loads saved issue provenance and raw cells only on explicit detail request
   const rawDetail = await persistence.loadRawImportRow(raw.id)
   expect(rawDetail.rawCells).toEqual(preview().rawRows[0].rawCells)
   expect(seen).toContain('raw_import_rows')
+})
+
+test('loads candidate evidence and keeps normalized and reviewed values distinct', async () => {
+  const candidate = {
+    id: 'candidate-1', workspace_id: workspaceId, import_batch_id: batchId,
+    raw_import_row_id: 'raw-1', supporting_raw_row_ids: [], validation_revision: 1,
+    candidate_ordinal: 1, kind: 'PRODUCT', source_sheet: '단가표', source_row: 6,
+    source_block: 'PRODUCT', source_field_map: { sabangnetCode: 'B6' },
+    normalized_values: { sabangnetCode: '100526' }, candidate_status: 'ERROR',
+    issue_codes: ['DUPLICATE_BUSINESS_KEY'], reviewed_values: { sabangnetCode: '100999' },
+    review_note: '원본 소유자 확인', review_revision: 1, reviewed_by: 'admin-1',
+    reviewed_at: '2026-10-25T01:00:00Z',
+  }
+  const fake = fakeClient({ import_batches: [batchRow()], import_candidates: [candidate] })
+  const saved = await createImportPersistence({ supabase: fake.supabase, workspaceId })
+    .loadSavedImportCandidates(batchId)
+  expect(saved).toEqual([expect.objectContaining({
+    id: 'candidate-1', sourceSheet: '단가표', sourceRow: 6, reviewRevision: 1,
+    normalizedValues: { sabangnetCode: '100526' }, reviewedValues: { sabangnetCode: '100999' },
+  })])
+  expect(candidate.normalized_values).toEqual({ sabangnetCode: '100526' })
+})
+
+test('rejects cross-workspace or malformed candidate response rows', async () => {
+  const base = {
+    id: 'candidate-1', workspace_id: workspaceId, import_batch_id: batchId,
+    raw_import_row_id: 'raw-1', supporting_raw_row_ids: [], validation_revision: 1,
+    candidate_ordinal: 1, kind: 'PRODUCT', source_sheet: '단가표', source_row: 6,
+    source_block: 'PRODUCT', source_field_map: {}, normalized_values: {},
+    candidate_status: 'VALID', issue_codes: [], reviewed_values: null, review_note: null,
+    review_revision: 0, reviewed_by: null, reviewed_at: null,
+  }
+  for (const row of [{ ...base, workspace_id: 'workspace-b' }, { ...base, source_field_map: [] }]) {
+    const fake = fakeClient({ import_batches: [batchRow()] })
+    fake.supabase.from = ((name: string) => name === 'import_candidates'
+      ? new Query([row], true) : new Query([batchRow()])) as unknown as typeof fake.supabase.from
+    await expect(createImportPersistence({ supabase: fake.supabase, workspaceId }).loadSavedImportCandidates(batchId))
+      .rejects.toThrow('저장된 후보를 불러오지 못했습니다.')
+  }
+})
+
+test('review calls use revision guards and report errors without leaking SQL details', async () => {
+  const fake = fakeClient({}, () => ({ data: null, error: null }))
+  const persistence = createImportPersistence({ supabase: fake.supabase, workspaceId })
+  await persistence.reviewCandidate('candidate-1', 1, 0, { sabangnetCode: '100999' }, '소유자 확인')
+  await persistence.reviewIssue('issue-1', 1, 0, 'RESOLVED', '소유자 확인')
+  expect(fake.calls).toEqual([
+    { name: 'review_import_candidate', args: {
+      p_candidate_id: 'candidate-1', p_expected_validation_revision: 1,
+      p_expected_review_revision: 0, p_reviewed_values: { sabangnetCode: '100999' },
+      p_resolution: '소유자 확인',
+    } },
+    { name: 'review_import_validation_issue', args: {
+      p_issue_id: 'issue-1', p_expected_validation_revision: 1,
+      p_expected_review_revision: 0, p_status: 'RESOLVED', p_resolution: '소유자 확인',
+    } },
+  ])
+  await expect(persistence.reviewIssue('issue-1', 1, 0, 'DEFERRED', '')).rejects.toThrow('이슈 검토 입력이 올바르지 않습니다.')
+  const failed = createImportPersistence({
+    supabase: fakeClient({}, () => ({ data: null, error: new Error('secret SQL detail') })).supabase,
+    workspaceId,
+  })
+  await expect(failed.reviewCandidate('candidate-1', 1, 0, {}, '소유자 확인'))
+    .rejects.toThrow('후보 검토 저장에 실패했습니다. 최신 기록을 다시 확인해 주세요.')
 })
 
 test('rejects cross-workspace response rows even if remote query is compromised', async () => {

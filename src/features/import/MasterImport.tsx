@@ -46,7 +46,7 @@ function RelatedCandidates({ preview, issue }: { preview: MasterImportPreview; i
   return <><h3 className="import-detail-heading">관련 Product / SKU / BOM 후보</h3>{candidates.length ? <ul className="import-related-candidates">{candidates.map(item => <li key={item.id}><span>{item.label}</span><Status value={item.status} /></li>)}</ul> : <p className="muted">연결된 후보가 없습니다.</p>}</>
 }
 
-export function MasterImport({ persistence }: { persistence?: ImportPersistence }) {
+export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: ImportPersistence; role?: 'ADMIN' | 'EDITOR' }) {
   const requestId = useRef(0)
   const savingPreviewId = useRef<number | null>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -169,7 +169,7 @@ export function MasterImport({ persistence }: { persistence?: ImportPersistence 
       </section>
     </>}
 
-    {persistence && <SavedImportReview persistence={persistence} refreshKey={historyRefresh} />}
+    {persistence && <SavedImportReview persistence={persistence} refreshKey={historyRefresh} role={role} />}
 
     {selectedIssue && preview && <Drawer title={selectedIssue.code} subtitle={source(selectedIssue.sourceSheet, selectedIssue.sourceRow)} onClose={() => setSelectedIssue(null)}><dl className="import-issue-detail"><dt>차단 범위</dt><dd>{selectedIssue.blockingScope}</dd><dt>원본 값</dt><dd>{String(selectedIssue.observedValue ?? '—')}</dd><dt>기대 규칙</dt><dd>{selectedIssue.expectedRule}</dd><dt>설명</dt><dd>{selectedIssue.message}</dd><dt>관련 행</dt><dd>{selectedIssue.relatedRows.length ? selectedIssue.relatedRows.map(row => `${row}행`).join(', ') : '—'}</dd></dl><RelatedCandidates preview={preview} issue={selectedIssue} /><h3 className="import-detail-heading">원본 행</h3>{rawRow ? <dl className="import-raw-cells">{rawRow.rawCells.map(cell => <div key={cell.address}><dt>{cell.address} · {cell.originalType}</dt><dd>{String(cell.originalValue ?? cell.cachedValue ?? '빈 값')}{cell.formulaText && <small>수식: {cell.formulaText}</small>}{cell.errorCode && <small>오류: {cell.errorCode}</small>}</dd></div>)}</dl> : <p className="muted">이 이슈는 파일 구조 전체에 관한 것입니다.</p>}</Drawer>}
   </div>

@@ -4,11 +4,12 @@
 
 SellerAudit은 두 실행 모드를 지원한다. 기본 `mock` 모드는 기존 브라우저 데모와 회귀 테스트에 사용하고, `supabase` 모드는 별도 Development Supabase 프로젝트에서 이메일 로그인, ACTIVE Workspace 멤버십, 역할 기반 UI와 중앙 `SellerRepository`를 검증한다.
 
-이 통합은 Development와 Internal Pilot 준비 단계다. SellerAudit용 원격 개발 프로젝트와 자격증명이 제공되지 않아 원격 Migration, Auth, Data API, RLS, RPC 검증은 아직 실행하지 않았다.
+이 통합은 Development와 Internal Pilot 준비 단계다. 프로젝트 소유자는 2026-10-25 SellerAudit 전용 Development 프로젝트에서 기존 5개 Migration과 Auth, Data API, RLS, Import RPC 인수 검증을 완료했다고 제공했다. 프로젝트와 검증 범위는 [Remote Acceptance](SUPABASE_REMOTE_ACCEPTANCE.md)에 기록한다.
 
 ```text
 LOCAL IMPLEMENTATION = GO
-REMOTE SUPABASE ACCEPTANCE = HOLD
+REMOTE 5D SUPABASE ACCEPTANCE = GO (PROJECT OWNER REPORTED, 2026-10-25)
+REMOTE 5E ACCEPTANCE = HOLD (DB CONTRACT PASS, LIVE AUTH/BROWSER PARTIAL)
 ```
 
 ## Environment Variables
@@ -64,7 +65,7 @@ Supabase 모드의 부트스트랩 순서는 다음과 같다.
 
 `SIGNED_IN`, `SIGNED_OUT`, `TOKEN_REFRESHED`, `USER_UPDATED` 이벤트를 구독하며 React unmount 시 listener를 해제한다. 로그아웃은 현재 브라우저의 Supabase 세션을 종료하고 먼저 업무 화면을 제거한다. Session과 token을 별도 앱 저장소에 복사하거나 Console에 출력하지 않는다.
 
-Public Sign Up은 Internal Pilot 정책상 Development 프로젝트에서도 꺼야 한다. 이메일 확인 정책은 Dashboard의 실제 설정을 확인해 테스트 계정 프로비저닝 절차와 맞춘다. 비밀번호 재설정은 redirect URL, 이메일 Template, SMTP 정책을 검증할 프로젝트가 없으므로 이번 단계에서 **DEFER**했다.
+Public Sign Up은 Internal Pilot 정책상 Development 프로젝트에서도 꺼야 한다. 이메일 확인 정책은 Dashboard의 실제 설정을 확인해 테스트 계정 프로비저닝 절차와 맞춘다. 비밀번호 재설정은 redirect URL, 이메일 Template과 SMTP 정책이 5D 인수 범위에 포함되지 않아 **DEFER** 상태다.
 
 ## Workspace Flow
 
@@ -76,13 +77,13 @@ Workspace가 하나면 자동 선택한다. 둘 이상이면 저장된 사용자
 
 ## Role Model
 
-| Role | 조회 | Offer Mapping | Audit 상태 변경 | Master Dry-run / 검증 결과 저장 |
-| --- | :---: | :---: | :---: | :---: |
-| `ADMIN` | 허용 | 허용 | 허용 | 허용 |
-| `EDITOR` | 허용 | 허용 | 허용 | 허용 |
-| `VIEWER` | 허용 | 거부 | 거부 | 거부 |
+| Role | 조회 | Offer Mapping | Audit 상태 변경 | Master Dry-run / snapshot 저장 | Candidate / Issue review |
+| --- | :---: | :---: | :---: | :---: | :---: |
+| `ADMIN` | 허용 | 허용 | 허용 | 허용 | 허용 |
+| `EDITOR` | 허용 | 허용 | 허용 | 허용 | 읽기 전용 |
+| `VIEWER` | Batch metadata만 | 거부 | 거부 | 거부 | 거부 |
 
-VIEWER의 Mapping과 Audit 화면은 읽기 전용으로 표시한다. Master Dry-run 메뉴를 숨기고 직접 `#/import/master`로 접근해도 실행을 차단한다. UI guard는 사용성 경계이고 실제 쓰기 권한은 `map_offer`, `update_issue_status` RPC가 현재 ACTIVE ADMIN/EDITOR인지 확인한다.
+VIEWER의 Mapping과 Audit 화면은 읽기 전용으로 표시한다. Master Dry-run 메뉴를 숨기고 직접 `#/import/master`로 접근해도 실행을 차단한다. EDITOR는 저장된 Candidate와 Issue를 조회하지만 review control을 사용할 수 없다. UI guard는 사용성 경계이고 실제 쓰기 권한은 trusted RPC가 현재 ACTIVE membership과 역할을 다시 확인한다.
 
 Role과 Status를 JWT의 사용자 metadata에서 읽지 않는다. `workspace_members`가 현재 권한의 기준이며 `INVITED`와 `DISABLED`는 업무 데이터에 접근할 수 없다.
 
@@ -116,7 +117,7 @@ Repository가 각 업무 테이블을 ID 오름차순, 500행 단위로 끝까�
 
 `mapOffer`는 Offer와 Product가 선택 Workspace에 있는지 먼저 확인하고 `map_offer` RPC를 호출한다. `updateIssueStatus`도 Issue 범위와 허용 상태를 확인한 뒤 `update_issue_status` RPC를 호출한다. 성공 후 전체 Workspace 데이터를 다시 읽어 서버 상태를 반영한다. Component에서 `supabase.from(...)` 또는 `supabase.rpc(...)`를 직접 호출하지 않는다.
 
-Master Import persistence는 Core 업무 데이터용 `SellerRepository`에 섞지 않고 별도 `ImportPersistence` contract로 제공한다. `saveMasterDryRun`, `listSavedMasterImports`, `loadSavedImportIssues`, `loadRawImportRow`가 저장 payload 변환과 shared review 조회를 담당한다. 세부 계약은 [Master Import persistence](data/MASTER_IMPORT_PERSISTENCE.md)를 따른다.
+Master Import persistence는 Core 업무 데이터용 `SellerRepository`에 섞지 않고 별도 `ImportPersistence` contract로 제공한다. 저장, Batch/Raw/Candidate/Issue 조회와 Candidate/Issue review가 이 경계에 모인다. 세부 계약은 [Master Import persistence](data/MASTER_IMPORT_PERSISTENCE.md)와 [Candidate Review](data/IMPORT_CANDIDATE_REVIEW.md)를 따른다.
 
 ## Supabase Development Setup
 
@@ -124,7 +125,7 @@ Master Import persistence는 Core 업무 데이터용 `SellerRepository`에 섞�
 2. Dashboard에서 Project URL과 publishable key를 확인한다. Secret key는 복사하지 않는다.
 3. Authentication의 Email/Password provider를 활성화하고 Public Sign Up을 끈다.
 4. Email confirmation 정책을 정하고 테스트 계정 생성 방식과 일치시키며, Production 정책으로 간주하지 않는다.
-5. 아래 절차로 저장소의 다섯 Migration을 검토하고 Development 프로젝트에 적용한다.
+5. 새 Migration을 적용할 때 아래 절차로 원격 이력과 expected migration만 검토한다.
 6. Dashboard 또는 별도 신뢰된 관리자 경계에서 테스트 Auth User와 Workspace 멤버십을 만든다.
 7. `.env.local`에 Development URL과 publishable key를 넣고 `VITE_DATA_SOURCE=supabase`로 실행한다.
 
@@ -143,7 +144,7 @@ npx --yes supabase db push --linked
 npx --yes supabase migration list --linked
 ```
 
-적용 전 `--dry-run`에서 다섯 Migration만 대상인지 검토한다. 적용 후 로컬과 원격 이력에 아래 버전이 모두 있어야 한다.
+5D 인수 시 아래 다섯 Migration이 저장소 timestamp와 같은 버전으로 적용됐다고 프로젝트 소유자가 보고했다.
 
 ```text
 20261009015155
@@ -153,7 +154,14 @@ npx --yes supabase migration list --linked
 20261025090001
 ```
 
-원격 프로젝트에 `db reset --linked`를 실행하지 않는다. 이 절차의 명령 형식은 Supabase CLI 공식 문서로 확인했지만, SellerAudit Development 프로젝트가 없어 실제 원격 실행은 하지 않았다.
+Prompt 5E의 두 migration도 원격 적용돼 저장소와 remote migration list 7개가 일치한다. 둘 다 위 5D 인수 결과와는 별도 검증 범위다.
+
+```text
+20261025114440
+20261025115414
+```
+
+원격 프로젝트에 `db reset --linked`를 실행하지 않는다. 5E Migration은 적용 전 프로젝트 ref가 `yzpkhvuftusnshdqfnim`인지 다시 확인하고, drift와 dry-run 결과에 expected migration만 표시될 때 진행한다.
 
 ## Development Test Accounts
 
@@ -172,21 +180,21 @@ Workspace B에는 별도 안전한 테스트 데이터를 만들고 Workspace A 
 
 Dashboard SQL Editor는 높은 권한으로 실행되어 사용자 RLS 인수 검증에 사용하지 않는다. 각 테스트 계정으로 앱에 로그인하거나 해당 사용자 세션의 Data API/RPC를 통해 검증한다.
 
-| 시나리오 | 기대 결과 | 현재 결과 |
+| 시나리오 | 기대 결과 | 5D 보고 결과 |
 | --- | --- | --- |
-| ACTIVE ADMIN이 Workspace A 데이터 조회 | ALLOW | NOT RUN |
-| ACTIVE EDITOR가 Workspace A 데이터 조회 | ALLOW | NOT RUN |
-| ACTIVE VIEWER가 Workspace A 데이터 조회 | ALLOW | NOT RUN |
-| VIEWER가 `map_offer`, `update_issue_status` 호출 | DENY | NOT RUN |
-| EDITOR가 두 RPC 호출 | ALLOW | NOT RUN |
-| ADMIN이 두 RPC 호출 | ALLOW | NOT RUN |
-| ACTIVE 사용자를 같은 세션에서 DISABLED로 변경한 뒤 재조회 | DENY | NOT RUN |
-| Workspace A 사용자가 Workspace B 행 조회 | 빈 결과 또는 DENY | NOT RUN |
-| ACTIVE ADMIN/EDITOR가 Master Dry-run 저장 | ALLOW, Batch/Raw/Issue/ActivityLog 원자적 생성 | NOT RUN |
-| VIEWER·DISABLED·익명이 Master Dry-run 저장 | DENY | NOT RUN |
-| Workspace A 사용자가 Workspace B로 Dry-run 저장 | DENY | NOT RUN |
+| ACTIVE ADMIN이 Workspace A 데이터 조회 | ALLOW | PASS |
+| ACTIVE EDITOR가 Workspace A 데이터 조회 | ALLOW | PASS |
+| ACTIVE VIEWER가 Workspace A 데이터 조회 | ALLOW | PASS |
+| VIEWER가 `map_offer`, `update_issue_status` 호출 | DENY | PASS |
+| EDITOR가 두 RPC 호출 | ALLOW | PASS |
+| ADMIN이 두 RPC 호출 | ALLOW | PASS |
+| ACTIVE 사용자를 같은 세션에서 DISABLED로 변경한 뒤 재조회 | DENY | PASS |
+| Workspace A 사용자가 Workspace B 행 조회 | 빈 결과 또는 DENY | PASS |
+| ACTIVE ADMIN/EDITOR가 Master Dry-run 저장 | ALLOW, Batch/Raw/Issue/ActivityLog 원자적 생성 | PASS |
+| VIEWER·DISABLED·익명이 Master Dry-run 저장 | DENY | PASS |
+| Workspace A 사용자가 Workspace B로 Dry-run 저장 | DENY | PASS |
 
-RPC 허용 테스트는 안전한 개발용 행만 사용하고 결과를 원복할 수 있어야 한다. 브라우저 UI의 read-only 처리와 별개로 RPC 직접 호출 거부도 확인한다. PGlite는 SQL Contract를 계속 검증하지만 Auth, API gateway와 PostgREST를 포함하지 않으므로 이 원격 절차를 대체하지 않는다.
+표의 PASS는 프로젝트 소유자가 제공한 2026-10-25 `selleraudit-dev` 5D 인수 결과다. 생성한 acceptance 데이터는 모두 정리됐다고 보고됐다. 브라우저 UI의 read-only 처리와 별개로 RPC 직접 호출 거부를 확인한다. PGlite는 SQL Contract를 계속 검증하지만 Auth, API gateway와 PostgREST를 포함하지 않으므로 이 원격 절차를 대체하지 않는다. Candidate Snapshot과 Human Review는 이 결과에 포함되지 않으며 별도 5E 원격 인수가 필요하다.
 
 ## Local Integration Verification
 
@@ -212,31 +220,31 @@ npm run test:e2e:supabase
 
 ## Known Limitations
 
-- SellerAudit용 Development Supabase 프로젝트, URL, publishable key와 테스트 계정이 없어 원격 Migration/Auth/RLS/Data API/RPC acceptance를 수행하지 않았다.
-- Public Sign Up, Email confirmation, Site URL과 Redirect URL의 실제 Dashboard 설정은 아직 확인하지 않았다.
+- 5D 원격 Migration/Auth/RLS/Data API/RPC acceptance는 프로젝트 소유자 제공 결과로 기록했으며, 이 문서 작업에서 독립 재실행하지 않았다.
+- Candidate Snapshot과 Human Review의 5E 원격 DB contract는 통과했다. 실제 Auth 브라우저 인수는 ADMIN·VIEWER·DISABLED에서 통과했고 EDITOR 자격증명 오류로 미완료다.
+- Public Sign Up, Email confirmation, Site URL과 Redirect URL의 실제 Dashboard 설정은 이 문서 작업에서 재확인하지 않았다.
 - 비밀번호 재설정은 DEFER 상태다.
 - 직원 초대, Role/Status 변경, Workspace 생성과 마지막 ACTIVE ADMIN 보호 UI/RPC가 없다.
-- ActivityLog 실제 writer는 Master Dry-run 저장의 `IMPORT_VALIDATED` 한 건에만 적용됐다. 다른 업무·Import 이벤트는 아직 없다.
-- Master Dry-run의 Batch/Raw Row/Validation Issue 저장은 구현됐지만 원본 binary, Candidate snapshot, review override와 Product/SKU/BOM Apply는 없다.
+- ActivityLog writer는 Master Dry-run 저장의 `IMPORT_VALIDATED`와 Candidate/Issue review의 `IMPORT_REVIEWED`에 적용된다. 다른 업무·Import 이벤트는 아직 없다.
+- Master Dry-run의 Batch/Raw Row/Candidate/Validation Issue snapshot과 ADMIN review 기록은 구현됐지만 원본 binary와 Product/SKU/BOM Apply는 없다.
 - Role 변경 Realtime 반영은 없으며 새로고침 또는 Workspace 데이터 새로고침이 필요하다.
 - Repository는 서버 응답을 500행 단위로 페이지 처리하지만 현재 Workspace의 Core 데이터 전체를 브라우저 메모리에 구성한다. 화면 단위 조회와 증분 동기화는 후속 검증 대상이다.
 - 실제 사내 데이터 Import, Internal Pilot 배포와 Production 배포를 수행하지 않았다.
 
 ## Current Stop Line
 
-현재 완료 범위는 Mock/Supabase 모드 분리, 안전한 Supabase client 설정, 이메일 로그인·세션 복원·로그아웃, ACTIVE Workspace 선택, ADMIN/EDITOR/VIEWER 인식, Core SellerRepository read, 두 업무 RPC, VIEWER UI guard와 Master Dry-run의 Batch/Raw/Issue/`IMPORT_VALIDATED` 중앙 저장·공유 조회까지다.
+현재 완료 범위는 Mock/Supabase 모드 분리, 안전한 Supabase client 설정, 이메일 로그인·세션 복원·로그아웃, ACTIVE Workspace 선택, ADMIN/EDITOR/VIEWER 인식, Core SellerRepository read, 두 업무 RPC, VIEWER UI guard와 Master Dry-run의 Batch/Raw/Candidate/Issue 중앙 저장, ADMIN review와 `IMPORT_VALIDATED`/`IMPORT_REVIEWED` 기록까지다.
 
 다음 기능은 여기서 시작하지 않는다.
 
 - Excel Storage 업로드와 server-verified hash
-- Product/SKU/BOM Candidate snapshot과 review override
 - Product, SKU, BOM Apply
 - `IMPORT_VALIDATED` 이외의 ActivityLog writer
 - 직원 초대와 Role 관리 UI
 - 비밀번호 재설정
 - 회사 Production 배포
 
-원격 Development 프로젝트에서 Migration, Auth, RLS와 RPC 인수 테스트를 통과하기 전까지 실제 직원 접속과 실제 업무 데이터 입력은 **HOLD**다.
+기존 5D 원격 인수는 프로젝트 소유자 보고 기준 GO다. 5E 역할별 원격 DB contract는 JWT claim으로 actor를 재현한 transaction에서 통과했다. 실제 이메일/비밀번호 Auth 브라우저 인수는 ADMIN·VIEWER·DISABLED에서 통과했으나 EDITOR 자격증명 오류로 `REMOTE 5E ACCEPTANCE = HOLD (DB CONTRACT PASS, LIVE AUTH/BROWSER PARTIAL)`이다. Internal Pilot은 [Pilot Readiness Gate](INTERNAL_PILOT_ARCHITECTURE.md#9-pilot-readiness-gate)의 나머지 항목을 통과하기 전까지 보류한다.
 
 ## Official References
 

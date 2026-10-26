@@ -25,7 +25,9 @@ try {
   const migrationDirectory = resolve(directory, '../../migrations')
   const migrations = (await readdir(migrationDirectory)).filter(name => name.endsWith('.sql')).sort()
   const importFoundationIndex = migrations.findIndex(name => name.includes('import_foundation_and_roles'))
+  const candidateReviewIndex = migrations.findIndex(name => name.includes('import_candidate_snapshot_and_review'))
   if (importFoundationIndex < 0) throw new Error('Expected the import foundation and roles migration')
+  if (candidateReviewIndex < 0) throw new Error('Expected the candidate snapshot and review migration')
 
   for (const name of migrations.slice(0, importFoundationIndex)) {
     await database.exec(await readFile(resolve(migrationDirectory, name), 'utf8'))
@@ -47,16 +49,22 @@ try {
       ('10000000-0000-0000-0000-000000000101', '00000000-0000-0000-0000-000000000103', 'MEMBER');
   `)
 
-  for (const name of migrations.slice(importFoundationIndex)) {
+  for (const name of migrations.slice(importFoundationIndex, candidateReviewIndex)) {
     await database.exec(await readFile(resolve(migrationDirectory, name), 'utf8'))
     log(`Migration PASS: ${name}`)
   }
   await database.exec(await readFile(resolve(directory, 'foundation_contract.sql'), 'utf8'))
   await database.exec(await readFile(resolve(directory, 'import_foundation_contract.sql'), 'utf8'))
   await database.exec(await readFile(resolve(directory, 'master_import_persistence_contract.sql'), 'utf8'))
+
+  for (const name of migrations.slice(candidateReviewIndex)) {
+    await database.exec(await readFile(resolve(migrationDirectory, name), 'utf8'))
+    log(`Migration PASS: ${name}`)
+  }
+  await database.exec(await readFile(resolve(directory, 'import_candidate_review_contract.sql'), 'utf8'))
   const tables = await database.query("select count(*)::int as count from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'")
-  if (tables.rows[0].count !== 14) throw new Error('Expected all 14 Foundation tables')
-  log('Database contract PASS: 14 tables; role backfill, RLS, trusted atomic import persistence, tenant isolation, mapping and issue transitions.')
+  if (tables.rows[0].count !== 15) throw new Error('Expected all 15 Foundation tables')
+  log('Database contract PASS: 15 tables; role backfill, RLS, atomic candidate persistence and review, tenant isolation, mapping and issue transitions.')
 } finally {
   await database.close()
 }

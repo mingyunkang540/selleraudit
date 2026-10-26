@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`20261025090000_import_foundation_and_roles.sql` adds the database boundary for a future central Import workflow. It does **not** connect the React app to Supabase, persist the browser Dry-run, upload a file, implement an Import writer, or apply Product/SKU/BOM candidates. The app still uses `MockRepository` and `localStorage`.
+`20261025090000_import_foundation_and_roles.sql`이 추가한 초기 DB boundary를 기록하는 문서다. 이 Migration 자체는 React 앱 연결, 브라우저 Dry-run persistence, 파일 업로드, Import writer 또는 Product/SKU/BOM Apply를 제공하지 않았다. 후속 구현의 현재 상태는 [Master Import Persistence](MASTER_IMPORT_PERSISTENCE.md)와 [Candidate Review](IMPORT_CANDIDATE_REVIEW.md)를 따른다.
 
 ## WorkspaceMember Role Migration
 
@@ -49,4 +49,4 @@ The isolated PGlite contract checks sequential migration and conservative role/s
 
 ## Current Stop Line
 
-Only DB schema, RLS, grants, RPC authorization hardening, and local contract tests are in scope. No Supabase project is connected, and no Auth UI, employee account, Storage bucket, Import upload/writer/Apply, ActivityLog event recording, or company deployment is provided. The [Internal Pilot readiness gate](../INTERNAL_PILOT_ARCHITECTURE.md#9-pilot-readiness-gate) remains open.
+이 Foundation Migration의 완료 범위는 DB schema, RLS, grants, RPC authorization hardening과 local contract다. 후속 단계에서 Supabase Auth/Repository, Master Dry-run persistence, Candidate snapshot과 ADMIN review를 구현했다. Storage bucket, Product/SKU/BOM Apply와 Production 배포는 여전히 제공하지 않으며 [Internal Pilot readiness gate](../INTERNAL_PILOT_ARCHITECTURE.md#9-pilot-readiness-gate)는 열려 있다.

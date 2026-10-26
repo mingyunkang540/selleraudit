@@ -1,10 +1,10 @@
 # SellerAudit Internal Pilot Architecture (Prompt 2.1, 설계안)
 
-이 문서는 [Data Model V2 Proposal](data/DATA_MODEL_V2_PROPOSAL.md)의 업무 Entity와 RAW → NORMALIZED → MASTER 경계를 유지하면서 땡스소윤 내부 파일럿의 인증·권한·운영 경계를 정의한다. Workspace Role/Status와 Import·ActivityLog **DB Foundation만** 후속 [Migration](data/IMPORT_DB_FOUNDATION.md)으로 구현되었다. 현재 앱은 MockRepository/localStorage만 사용하고, 저장소의 SQL은 어떤 Supabase 프로젝트에도 적용되지 않았다. Auth·실사용 Import·배포 계획은 여전히 설계다.
+이 문서는 [Data Model V2 Proposal](data/DATA_MODEL_V2_PROPOSAL.md)의 업무 Entity와 RAW → NORMALIZED → MASTER 경계를 유지하면서 땡스소윤 내부 파일럿의 인증·권한·운영 경계를 정의한다. Workspace Role/Status, Supabase Auth·중앙 Repository, Import Batch/Raw/Candidate/Issue persistence와 ActivityLog가 로컬에 구현됐다. `selleraudit-dev`에는 7개 Migration이 적용됐고 5E 역할별 DB contract는 통과했다. 실제 이메일/비밀번호 Auth 브라우저 인수와 회사 배포는 아직 완료되지 않았다.
 
 ## 1. 현재 상태와 목표 구조
 
-`workspaces`와 `(workspace_id, user_id)` PK를 가진 `workspace_members`는 재사용한다. Prompt 5A의 새 Migration은 `ADMIN/EDITOR/VIEWER`, `INVITED/ACTIVE/DISABLED`, ACTIVE 기반 RLS와 기존 두 업무 RPC의 역할 검사를 로컬 SQL에 추가한다. **실제 Supabase/Auth 통합은 아직 없다.** 운영 데이터를 넣거나 직원을 초대하기 전에 중앙 연결·통합 검증과 아래 Pilot Gate가 필요하다.
+`workspaces`와 `(workspace_id, user_id)` PK를 가진 `workspace_members`는 재사용한다. Migration은 `ADMIN/EDITOR/VIEWER`, `INVITED/ACTIVE/DISABLED`, ACTIVE 기반 RLS와 trusted RPC의 역할 검사를 적용한다. 실제 Supabase/Auth 통합은 구현됐지만 운영 데이터를 넣거나 직원을 초대하기 전에 아래 Pilot Gate의 남은 항목을 완료해야 한다.
 
 ```text
 직원 브라우저 (HTTPS)
@@ -34,7 +34,8 @@ Auth User는 **신원**, WorkspaceMember는 **Workspace별 권한**이다. 한 A
 | --- | :---: | :---: | :---: |
 | Dashboard/Product/SKU/Channel/Sales/Marketing/Audit 조회 | 허용 | 허용 | 허용 |
 | Import Batch/검증 결과 조회 | 허용 | 허용 | 허용¹ |
-| Import 업로드·Dry-run·검토 | 허용 | 허용 | 거부 |
+| Import 업로드·Dry-run·snapshot 저장 | 허용 | 허용 | 거부 |
+| Candidate override·Issue decision | 허용 | 읽기 전용 | 거부 |
 | Import 승인·Apply/재적용 | 허용 | 거부 | 거부 |
 | Offer Mapping/Alias 변경 | 허용 | 허용 | 거부 |
 | Audit Issue 상태 변경 | 허용 | 허용 | 거부 |
@@ -64,11 +65,11 @@ Auth User는 **신원**, WorkspaceMember는 **Workspace별 권한**이다. 한 A
 
 전체 `before_data`/`after_data` 스냅샷은 디버깅이 쉽지만 원본 셀, 개인정보, 토큰이 복제되고 저장량·삭제 비용이 커진다. **파일럿은 변경 필드만 허용 목록으로 저장**한다. 예를 들어 Offer 매핑은 `master_product_id`의 이전/새 UUID, Audit은 `status`의 이전/새 값만 기록한다. 원본 파일·RawImportRow·비밀번호·토큰·이메일·민감 메모는 넣지 않는다. 중요한 행위의 상세 재현은 별도 업무 행과 Import Batch/Raw의 권한 관리된 원본을 참조한다. 로그는 앱 사용자에게 append-only이며 ADMIN만 Workspace 범위에서 읽고, 직접 INSERT/UPDATE/DELETE는 거부한다. 보존 기간과 export/delete 정책은 실제 데이터/법무 검토 후 확정한다.
 
-최소 action: `IMPORT_CREATED`, `IMPORT_VALIDATED`, `IMPORT_APPLIED`, `IMPORT_FAILED`, `IMPORT_CONFLICT_RESOLVED`, `OFFER_MAPPED`, `OFFER_REMAPPED`, `ALIAS_CHANGED`, `AUDIT_STATUS_CHANGED`, `PRODUCT_PROMOTED`, `WORKSPACE_MEMBER_INVITED`, `WORKSPACE_MEMBER_ROLE_CHANGED`, `WORKSPACE_MEMBER_DISABLED`. 성공한 쓰기와 로그는 **동일 트랜잭션**에서 commit/rollback한다. Import 실패는 실패한 트랜잭션이 rollback된 뒤 신뢰된 경계에서 별도 트랜잭션으로 `IMPORT_FAILED`와 제한된 오류 코드·correlation ID를 기록한다. 로그 기록 실패 시 성공한 업무 쓰기를 단독 commit하지 않는다. actor는 클라이언트 인자가 아니라 검증된 Auth 컨텍스트에서 도출한다. 자동 작업은 별도 신뢰된 시스템 actor 규칙을 수립한 뒤 기록한다.
+최소 action: `IMPORT_CREATED`, `IMPORT_VALIDATED`, `IMPORT_REVIEWED`, `IMPORT_APPLIED`, `IMPORT_FAILED`, `IMPORT_CONFLICT_RESOLVED`, `OFFER_MAPPED`, `OFFER_REMAPPED`, `ALIAS_CHANGED`, `AUDIT_STATUS_CHANGED`, `PRODUCT_PROMOTED`, `WORKSPACE_MEMBER_INVITED`, `WORKSPACE_MEMBER_ROLE_CHANGED`, `WORKSPACE_MEMBER_DISABLED`. 성공한 쓰기와 로그는 **동일 트랜잭션**에서 commit/rollback한다. Import 실패는 실패한 트랜잭션이 rollback된 뒤 신뢰된 경계에서 별도 트랜잭션으로 `IMPORT_FAILED`와 제한된 오류 코드·correlation ID를 기록한다. 로그 기록 실패 시 성공한 업무 쓰기를 단독 commit하지 않는다. actor는 클라이언트 인자가 아니라 검증된 Auth 컨텍스트에서 도출한다. 자동 작업은 별도 신뢰된 시스템 actor 규칙을 수립한 뒤 기록한다.
 
 ## 5. Import 권한과 중앙 Persistence
 
-초기 파일럿은 **정책 B: EDITOR는 업로드·Dry-run·검토까지, ADMIN만 승인·Apply**를 채택한다. 정책 A(EDITOR도 Apply)는 적은 인원에서 빠르지만 원본 품번 충돌·미상 SKU·BOM 오류를 Master에 승격할 위험이 크다. Dry-run은 Master 쓰기가 없는 검증 단계다. 같은 사용자의 검토와 최종 승인 분리는 이상적이나 3~5명 규모에서 항상 가능하지 않으므로, 최소 ADMIN 승인 기록과 충돌 해결 근거를 요구한다. `ImportBatch`, `RawImportRow`, `ImportValidationIssue`의 상태 전이는 신뢰된 경계에서만 처리하며, `APPLIED` 중복 적용은 idempotency key와 트랜잭션으로 차단한다. Prompt 3에서 상세 Import 계약을 정한다.
+초기 파일럿은 **정책 B: EDITOR는 업로드·Dry-run·snapshot 저장과 shared review 조회까지, ADMIN만 reviewed override와 Issue decision**을 채택한다. 승인·Apply는 5E 범위에 없다. Dry-run과 Human Review는 Master 쓰기가 없는 단계다. `ImportBatch`, `RawImportRow`, `ImportCandidate`, `ImportValidationIssue`의 변경은 신뢰된 경계에서만 처리한다. 상세 계약은 [Import Contract](data/IMPORT_CONTRACT.md)와 [Candidate Review](data/IMPORT_CANDIDATE_REVIEW.md)를 따른다.
 
 운영 Persistence 추천은 **전용 managed Supabase 프로젝트의 PostgreSQL + Auth**다. 기존 스키마와 RLS·RPC 설계를 재사용할 수 있다. 실제 연결 전에는 현재 SQL 및 후속 Pilot Migration을 개발 프로젝트에서 적용/검증해야 한다. UI는 `SellerRepository` 계약의 운영 구현체를 통해 중앙 데이터를 읽고, 쓰기 후 관련 목록을 refetch/invalidate한다. 다른 직원의 화면은 재조회/주기 갱신으로 변경을 관찰하도록 먼저 설계하고, Supabase Realtime은 요구와 부하가 확인된 후 선택한다. 즉시 push 동기화를 약속하지 않는다. 동시 수정은 원자적 RPC와 `updated_at`/version 기반 충돌 감지로 보호하고, 오래된 화면의 마지막 쓰기 덮어쓰기를 거부·재검토하게 한다.
 

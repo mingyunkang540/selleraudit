@@ -1,6 +1,6 @@
 # SellerAudit database foundation
 
-SellerAudit의 로컬 데이터베이스 계약은 네 개의 순차 마이그레이션으로 정의합니다.
+SellerAudit의 로컬 데이터베이스 계약은 일곱 개의 순차 마이그레이션으로 정의합니다.
 
 | Migration | 책임 |
 | --- | --- |
@@ -8,8 +8,11 @@ SellerAudit의 로컬 데이터베이스 계약은 네 개의 순차 마이그�
 | `20261010064046_audit_channel_context.sql` | Listing이 없는 채널 누락 Issue의 대상 Channel 보존 |
 | `20261010080630_harden_write_boundaries.sql` | 직접 DML 차단과 RPC 중심 write boundary |
 | `20261025090000_import_foundation_and_roles.sql` | ACTIVE 멤버십·ADMIN/EDITOR/VIEWER, Import 이력과 ActivityLog, RLS/RPC 강화 |
+| `20261025090001_master_import_dry_run_persistence.sql` | Master Dry-run Batch·Raw·Issue 원자적 persistence와 `IMPORT_VALIDATED` |
+| `20261025114440_import_candidate_snapshot_and_review.sql` | Candidate snapshot, ADMIN Candidate/Issue review와 `IMPORT_REVIEWED` |
+| `20261025115414_index_import_candidate_raw_row_fk.sql` | Candidate main Raw composite FK lookup index 보완 |
 
-이 SQL은 로컬 계약으로 작성되어 있으며 연결된 Supabase 프로젝트에는 적용하지 않았습니다. 현재 React 앱도 Supabase client, Auth 또는 Data API를 사용하지 않습니다.
+React 앱은 Mock 모드와 Supabase Auth/Data API 모드를 지원합니다. `selleraudit-dev`에는 저장소의 7개 Migration이 적용됐습니다. 기존 5D 인수와 5E 역할별 DB contract는 통과했습니다. 실제 Auth 브라우저 인수는 ADMIN·VIEWER·DISABLED에서 통과했고 EDITOR 계정 검증이 남아 있습니다. [Remote Acceptance](SUPABASE_REMOTE_ACCEPTANCE.md)에 확인 범위를 구분해 기록합니다.
 
 ## 테이블과 관계
 
@@ -27,6 +30,7 @@ SellerAudit의 로컬 데이터베이스 계약은 네 개의 순차 마이그�
 | `audit_issues` | 감사 Issue | Offer와 Listing 관계, 명시한 Channel과 Listing 일치 |
 | `import_batches` | Import 시도와 검증·적용 상태의 메타데이터 | Workspace 범위, Source/상태·hash·count CHECK |
 | `raw_import_rows` | 불변 원본 행 근거 | Batch·Sheet·행 번호 고유, 동일 Workspace FK, JSON array |
+| `import_candidates` | validation revision별 Product/SKU/BOM normalized snapshot과 reviewed override | Batch·Raw 동일 Workspace 복합 FK, revision/kind/ordinal 고유, snapshot immutable |
 | `import_validation_issues` | Master 적용 전 검증 문제 | Batch/Raw 동일 Workspace·Batch FK, Issue 상태·심각도 |
 | `activity_logs` | 사람의 중요 변경 이력 | ADMIN 범위 조회, 변경 필드 JSON object, opaque actor_ref |
 
@@ -45,8 +49,8 @@ Channel code는 DB에서도 `text`입니다. 현재 시드의 여섯 코드에 �
 - `anon`은 테이블 접근과 RPC 실행 권한이 없습니다.
 - `authenticated`는 `auth.uid()`의 현재 `ACTIVE` Workspace 멤버십이 허용하는 데이터만 읽을 수 있습니다. 신규 멤버십은 `VIEWER/INVITED`로 시작합니다.
 - 기존 `OWNER/ADMIN/MEMBER`는 새 마이그레이션에서 `ADMIN/ADMIN/VIEWER`로 변환되고 기존 멤버십만 `ACTIVE`로 backfill됩니다.
-- ACTIVE `ADMIN/EDITOR`만 기존 업무 RPC를 실행할 수 있습니다. ACTIVE `VIEWER`는 일반 업무 데이터와 Import Batch 메타데이터를 읽지만 Raw·상세 검증 Issue·ActivityLog는 읽지 못합니다. `INVITED/DISABLED`는 업무 데이터와 RPC에 접근하지 못합니다.
-- 네 개 신규 테이블은 직접 authenticated INSERT/UPDATE/DELETE가 금지됩니다. 읽기는 역할별 RLS와 SELECT grant를 함께 적용합니다.
+- ACTIVE `ADMIN/EDITOR`만 기존 업무 RPC와 Master Dry-run persistence를 실행할 수 있습니다. Candidate/Issue Human Review는 ACTIVE `ADMIN`만 실행합니다. ACTIVE `VIEWER`는 일반 업무 데이터와 Import Batch 메타데이터를 읽지만 Raw·Candidate·상세 검증 Issue·ActivityLog는 읽지 못합니다. `INVITED/DISABLED`는 업무 데이터와 RPC에 접근하지 못합니다.
+- Import/ActivityLog 테이블은 직접 authenticated INSERT/UPDATE/DELETE가 금지됩니다. 읽기는 역할별 RLS와 SELECT grant를 함께 적용합니다.
 - `workspace_members`의 Insert, Update, Delete는 브라우저 사용자에게 허용하지 않습니다. 가입과 최초 Workspace 생성은 `service_role` 또는 관리자 SQL 같은 신뢰된 경계에서 수행합니다.
 - `authenticated`는 `channel_offers.master_product_id`, `aliases`, `audit_issues.status/resolved_at`을 직접 쓰지 못합니다.
 - 업무 쓰기는 공개 RPC `map_offer`, `update_issue_status`로만 진입합니다.
@@ -55,12 +59,22 @@ RLS는 조회 격리의 한 축이며 privileged 함수의 안전성을 대신�
 
 ## RPC write boundary
 
-외부 API 이름은 다음과 같이 유지합니다.
+기존 Core 업무 API 이름은 다음과 같이 유지합니다.
 
 ```sql
 public.map_offer(p_offer_id uuid, p_master_product_id uuid)
 public.update_issue_status(p_issue_id uuid, p_status text)
 ```
+
+Master Import는 별도 공개 RPC 경계를 사용합니다.
+
+```text
+persist_master_import_dry_run(... 7 args ...)
+review_import_candidate(...)
+review_import_validation_issue(...)
+```
+
+정확한 signature와 역할 검사는 [Master Import Persistence](data/MASTER_IMPORT_PERSISTENCE.md)를 참고합니다. 기존 6-argument persistence 함수는 migration compatibility를 위해 남아 있지만 browser `authenticated` 실행 권한은 revoke됐습니다.
 
 `public` 함수는 빈 `search_path`를 사용하는 얇은 `SECURITY INVOKER` wrapper입니다. 실제 쓰기는 노출 스키마 밖의 `seller_audit_private` 함수가 수행합니다. 내부 함수는 `SECURITY DEFINER`, 빈 `search_path`, 완전 수식된 객체명을 사용합니다.
 
@@ -82,7 +96,7 @@ Alias upsert 등 중간 단계가 실패하면 Offer 변경과 Issue 해결을 �
 
 허용 상태는 `OPEN`, `IN_PROGRESS`, `RESOLVED`, `IGNORED`입니다. `NULL`이나 다른 값은 거부합니다. `RESOLVED` 전이에서는 기존 값이 없을 때만 `resolved_at`을 기록하며 다른 상태로 되돌리면 `resolved_at`을 `NULL`로 만듭니다.
 
-향후 Supabase `SellerRepository` 구현은 다음 형태로 공개 RPC만 호출해야 합니다.
+`SupabaseSellerRepository`는 다음 형태로 공개 RPC만 호출합니다.
 
 ```ts
 await supabase.rpc('map_offer', {
@@ -135,11 +149,11 @@ node supabase/tests/pglite/run.mjs (Join-Path $sellerAuditQa 'node_modules/@elec
 npm.cmd uninstall --prefix $sellerAuditQa --no-save --package-lock=false '@electric-sql/pglite'
 ```
 
-GitHub Actions도 동일한 pin과 runner를 사용합니다. Contract는 마이그레이션 적용, 14개 테이블, 기존 Role/Status 변환, 익명·비활성 접근 거부, Workspace A/B 격리, 신규 Import FK/고유·hash 제약, 역할별 읽기·RPC 권한, 직접 DML 차단, 매핑 원자성과 Issue 상태 전이를 확인해야 합니다. [Import DB Foundation](data/IMPORT_DB_FOUNDATION.md)에 신규 테이블과 보존 경계를 정리했습니다.
+GitHub Actions도 동일한 pin과 runner를 사용합니다. Contract는 마이그레이션 적용, 15개 테이블, 기존 Role/Status 변환, 익명·비활성 접근 거부, Workspace A/B 격리, Candidate persistence/review 원자성, stale revision, immutable snapshot, 역할별 읽기·RPC 권한, 직접 DML 차단, 매핑 원자성과 Issue 상태 전이를 확인합니다. [Import DB Foundation](data/IMPORT_DB_FOUNDATION.md), [Master Import Persistence](data/MASTER_IMPORT_PERSISTENCE.md)와 [Candidate Review](data/IMPORT_CANDIDATE_REVIEW.md)에 경계를 정리했습니다.
 
 PGlite는 PostgreSQL 엔진을 검증하지만 Supabase Auth, PostgREST와 API gateway를 포함하지 않습니다. 실제 Supabase 프로젝트를 연결한 뒤에는 별도 개발 프로젝트에서 pgTAP/RLS, Data API와 Auth 통합을 다시 검증해야 합니다.
 
-로컬 PGlite Contract의 최신 통과 여부는 runner 결과를 기준으로 판단합니다. 실제 Supabase 배포와 Auth/PostgREST 통합은 아직 검증하지 않았습니다.
+로컬 PGlite Contract의 최신 통과 여부는 runner 결과를 기준으로 판단합니다. 기존 5D Supabase Auth/PostgREST/RLS 인수는 프로젝트 소유자 보고 기준 GO이고, 5E Candidate/Review 원격 DB contract도 통과했습니다. 실제 Auth 브라우저 인수는 아직 실행하지 않았습니다.
 
 ## 라이브 적용 전 절차
 
@@ -160,4 +174,4 @@ npx --yes supabase link --project-ref <development-project-ref>
 npx --yes supabase db push
 ```
 
-현재 라이브 적용 상태는 미실행입니다.
+7개 Migration 모두 Development 프로젝트에 적용됐습니다. 5E DB contract는 통과했고 실제 Auth 브라우저 인수가 남아 있으며 Production 배포는 수행하지 않았습니다.
