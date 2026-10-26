@@ -6,7 +6,7 @@ Prompt 5E는 Master Workbook Dry-run의 Product, SKU, BOM Candidate를 `import_c
 
 ```text
 LOCAL 5E IMPLEMENTATION = GO
-REMOTE 5E ACCEPTANCE = HOLD (DB CONTRACT PASS, LIVE AUTH/BROWSER PARTIAL)
+REMOTE 5E ACCEPTANCE = GO (DB CONTRACT PASS, LIVE AUTH/BROWSER PASS)
 ```
 
 기존 5D 원격 Auth/RLS/Import 인수 결과와 5E 원격 인수는 별도다. [Remote Acceptance](../SUPABASE_REMOTE_ACCEPTANCE.md)를 참고한다.
@@ -166,12 +166,12 @@ Human Review
 
 ## Remote Status
 
-5E Migration 2개는 정확한 `selleraudit-dev` 프로젝트에 적용됐다. 역할별 persistence/review denial, cross-Workspace, stale revision, atomic rollback, ActivityLog와 Master table row count 불변은 원격 DB contract에서 통과했다. 실제 로그인·브라우저 인수는 ADMIN·VIEWER·DISABLED에서 통과했지만 EDITOR 계정의 자격증명 오류로 다음 상태를 유지한다.
+5E 관련 Migration 3개(`20261025114440`, `20261025115414`, `20261026093754`)를 정확한 `selleraudit-dev` 프로젝트에 적용했다. 역할별 persistence/review denial, cross-Workspace, stale revision, atomic rollback, ActivityLog와 Master table row count 불변은 원격 DB contract에서 통과했다. 2026-10-26 실제 ADMIN·EDITOR·VIEWER·DISABLED Auth 인수를 완료했다. EDITOR는 Candidate 저장과 Batch·Raw·Candidate·Issue 조회가 허용되고 ActivityLog 조회, Candidate/Issue review, Cross-Workspace 조회·저장은 거부됐다. 브라우저 review UI는 읽기 전용이며 fixture는 정확한 ID로 삭제했다.
 
 ```text
-REMOTE 5E ACCEPTANCE = HOLD
+REMOTE 5E ACCEPTANCE = GO
 DB CONTRACT = PASS
-LIVE AUTH / BROWSER = PARTIAL (EDITOR PENDING)
+LIVE AUTH / BROWSER = PASS
 ```
 
 다음 단계는 Apply가 아니다. Private Source File Storage, server-verified SHA-256과 revalidation/review consistency를 별도 단계로 검토한다.
