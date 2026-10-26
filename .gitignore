@@ -5,3 +5,5 @@ playwright-report/
 .env
 .env.local
 .env.remote-test.local.txt
+.env.ops.local
+.seller-audit-backups/

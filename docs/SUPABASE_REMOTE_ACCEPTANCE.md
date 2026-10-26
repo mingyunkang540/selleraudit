@@ -134,3 +134,19 @@ OVERALL REMOTE 5F = GO
 ```
 
 원본 검증은 Approval이나 Apply가 아니다. `READY_TO_APPLY`, Product/SKU/BOM Apply, validation revision 2와 Storage 자동 정리는 범위 밖이다. 상세 신뢰 계약과 backup 한계는 [원본 보관·검증](data/IMPORT_SOURCE_STORAGE.md)에 기록했다.
+
+## Prompt 5G 원본 백업·동일 경로 복구 리허설 (2026-10-26)
+
+5F commit `1830f5d`에서 분기한 5G는 DB·RLS·Edge·UI를 바꾸지 않고, `selleraudit-dev` (`yzpkhvuftusnshdqfnim`)의 전용 fixture 한 건에 [백업·복구 절차](ops/SOURCE_BACKUP_RESTORE.md)를 실행했다. 일반 ADMIN 세션으로 SourceFile 등록·private 업로드·서버 검증을 완료한 뒤, trusted local ops로 exact object를 백업하고 SHA-256/15,921 byte를 DB의 검증값과 대조했다. Storage API로 exact path 하나를 삭제하고 부재를 확인했으며, 같은 bucket/path에 `upsert: false`로 복원했다. Trusted download와 기존 ADMIN 60초 signed-download의 hash/size가 모두 일치했고 SourceFile metadata는 변하지 않았다.
+
+최종 fixture SourceFile ID는 `b4cdd47e-2bae-4902-b177-bd56f4091cde`, object path는 `bfa4dc64-f4f9-428e-b8f9-61ff36d27db8/b4cdd47e-2bae-4902-b177-bd56f4091cde/source.xlsx`, SHA-256은 `e387c806c3362c7ff8b003143ba1ccc7067371c718c69175e46bc062a5d3caec`이었다. 정확한 object path, SourceFile ID, ActivityLog ID `911454df-cc04-48e6-8ff6-19a8a88c4b60`, 로컬 fixture 백업을 정리했다. 사후 SQL exact ID 조회와 전체 count에서 SourceFile/Storage object/관련 ActivityLog 모두 0건이며 다른 object 수는 전후 0건으로 같았다.
+
+로컬 검증은 unit 61, 기본 E2E 16, Supabase-mode E2E 18, typecheck, lint, build, PGlite 10 migration·16 table DB contract가 통과했다. 원격 migration 수는 전후 10개, 기존 Edge Function은 각각 v2로 동일하다. Security Advisor 새 finding은 0건이며 기존 `Leaked Password Protection Disabled` warning 1건은 별도 Pilot 전 과제로 남긴다.
+
+```text
+LOCAL 5G = GO
+REMOTE 5G = GO
+OVERALL 5G = GO
+```
+
+이는 Development fixture 한 건의 복구 절차 증거다. 로컬 백업은 production/off-site/durable backup이 아니다. 자동 백업·retention·source 재검증·Approval·Apply는 구현하지 않았다.
