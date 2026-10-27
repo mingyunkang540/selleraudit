@@ -86,6 +86,13 @@ function normalizedText(sheet: WorkSheet, address: string): string | null {
   return value.length > 0 ? value : null
 }
 
+function normalizedProductType(sheet: WorkSheet, address: string): string | null {
+  const value = normalizedText(sheet, address)
+  if (value === '단품') return 'SINGLE'
+  if (value === '세트') return 'SET'
+  return value
+}
+
 function normalizedNumber(sheet: WorkSheet, address: string): number | null {
   const cell = sheet[address] as CellObject | undefined
   if (!cell || cell.t === 'e' || cell.v == null || cell.v === '') return null
@@ -156,7 +163,7 @@ function readProducts(sheet: WorkSheet): { rawRows: RawImportRow[]; products: Pr
       sabangnetCode: normalizedProductCode(sheet, `B${row}`),
       productName: normalizedText(sheet, `E${row}`),
       category: normalizedText(sheet, `D${row}`),
-      productType: normalizedText(sheet, `C${row}`),
+      productType: normalizedProductType(sheet, `C${row}`),
       rawBomText: normalizedText(sheet, `F${row}`),
       sourceQuantity: normalizedNumber(sheet, `H${row}`),
       sourceChannel,

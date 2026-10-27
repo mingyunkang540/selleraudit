@@ -83,6 +83,8 @@ try {
     log(`Migration PASS: ${name}`)
   }
   await database.exec(await readFile(resolve(directory, 'import_source_verification_contract.sql'), 'utf8'))
+  await database.exec(await readFile(resolve(directory, 'pilot_master_apply_contract.sql'), 'utf8'))
+  log('Pilot Master Apply contract PASS: preview, create-only apply, conflicts, roles, source trust, idempotency, rollback, and audit.')
   const tables = await database.query("select count(*)::int as count from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'")
   if (tables.rows[0].count !== 16) throw new Error('Expected all 16 Foundation tables')
   log('Database contract PASS: 16 tables; role backfill, RLS, atomic candidate persistence, verified source trust, tenant isolation, mapping and issue transitions.')

@@ -279,3 +279,54 @@ test('malformed stored raw cells fail safely instead of crashing the shared revi
       .rejects.toThrow('원본 행을 불러오지 못했습니다.')
   }
 })
+
+const applyCounts = {
+  productNew: 1, productUnchanged: 0, productConflict: 0, productSkipped: 1,
+  skuNew: 1, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
+  bomNew: 1, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
+  blockingBatchIssues: 0,
+}
+
+test('maps apply preview rows and calls the read-only RPC with only the batch id', async () => {
+  const response = { batchId, canApply: true, ...applyCounts, rows: [
+    { candidateId: 'candidate-product', kind: 'PRODUCT', status: 'NEW', businessKey: '100001' },
+    { candidateId: 'candidate-warning', kind: 'PRODUCT', status: 'SKIPPED_WARNING', businessKey: '100002', reason: 'VALID 후보만 적용합니다.' },
+  ] }
+  const fake = fakeClient({}, () => ({ data: response, error: null }))
+  await expect(createImportPersistence({ supabase: fake.supabase, workspaceId }).previewMasterImportApply(batchId))
+    .resolves.toEqual(response)
+  expect(fake.calls).toEqual([{ name: 'preview_master_import_apply', args: { p_batch_id: batchId } }])
+})
+
+test('maps apply result counts and never exposes malformed or database error details', async () => {
+  const response = { batchId, ...applyCounts, finalBatchStatus: 'PARTIALLY_APPLIED', appliedCount: 3, remainingCount: 1 }
+  const fake = fakeClient({}, () => ({ data: response, error: null }))
+  await expect(createImportPersistence({ supabase: fake.supabase, workspaceId }).applyMasterImportBatch(batchId))
+    .resolves.toEqual(response)
+  expect(fake.calls).toEqual([{ name: 'apply_master_import_batch', args: { p_batch_id: batchId } }])
+
+  for (const data of [
+    { ...response, batchId: 'other-batch' },
+    { ...response, productNew: -1 },
+    { ...response, finalBatchStatus: 'REVIEW_REQUIRED' },
+  ]) {
+    const malformed = fakeClient({}, () => ({ data, error: null }))
+    await expect(createImportPersistence({ supabase: malformed.supabase, workspaceId }).applyMasterImportBatch(batchId))
+      .rejects.toThrow('Master 적용에 실패했습니다. 배치 상태와 충돌 여부를 다시 확인해 주세요.')
+  }
+  const failed = fakeClient({}, () => ({ data: null, error: new Error('secret SQL detail') }))
+  await expect(createImportPersistence({ supabase: failed.supabase, workspaceId }).previewMasterImportApply(batchId))
+    .rejects.toThrow('Master 적용 미리보기를 불러오지 못했습니다.')
+})
+
+test('rejects unknown preview row states and batch mismatches', async () => {
+  for (const data of [
+    { batchId: 'other-batch', canApply: true, ...applyCounts, rows: [] },
+    { batchId, canApply: true, ...applyCounts, rows: [{ candidateId: 'candidate-1', kind: 'PRODUCT', status: 'UPDATED', businessKey: '100001' }] },
+    { batchId, canApply: true, ...applyCounts, rows: [{ candidateId: 'candidate-1', kind: 'CHANNEL', status: 'NEW', businessKey: '100001' }] },
+  ]) {
+    const fake = fakeClient({}, () => ({ data, error: null }))
+    await expect(createImportPersistence({ supabase: fake.supabase, workspaceId }).previewMasterImportApply(batchId))
+      .rejects.toThrow('Master 적용 미리보기를 불러오지 못했습니다.')
+  }
+})

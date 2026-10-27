@@ -150,3 +150,29 @@ OVERALL 5G = GO
 ```
 
 이는 Development fixture 한 건의 복구 절차 증거다. 로컬 백업은 production/off-site/durable backup이 아니다. 자동 백업·retention·source 재검증·Approval·Apply는 구현하지 않았다.
+
+## Prompt 6A Pilot Master Apply 인수 (2026-10-27)
+
+`selleraudit-dev` (`yzpkhvuftusnshdqfnim`)에 create-only Pilot Apply Migration을 적용했다. 원격 Migration version은 `20261027111722`이며 저장소 파일은 `supabase/migrations/20261027111722_pilot_master_apply_v1.sql`이다. Production에는 적용하지 않았다. `scripts/remote-6a-apply-acceptance.mjs`는 실제 ADMIN 브라우저와 ADMIN/EDITOR/VIEWER/DISABLED Auth 세션을 사용하고, `.env.ops.local`의 서버 전용 secret key는 정확한 ID 조회·정리에만 사용한다. 비밀번호·token·secret key·서명 URL은 출력하거나 커밋하지 않았다.
+
+전용 `__SELLERAUDIT_6A_APPLY__<unique>.xlsx`는 상품 1, SKU 1, BOM 1을 포함한다. 실제 브라우저에서 파일 선택, private Storage 업로드, 서버 byte SHA-256 검증, Dry-run과 Candidate 중앙 저장을 수행했다. 저장된 Batch의 Apply Preview는 Product/SKU/BOM 각각 `NEW 1`이었고 ADMIN의 명시적 확인 뒤 세 Master 행이 한 번 생성됐다. `applied_count=3`, `remaining_count=0`, Batch `APPLIED`, `IMPORT_APPLIED` ActivityLog 정확히 1건을 확인했다. 완료 Batch의 두 번째 Apply는 거부됐다.
+
+브라우저에서 Apply 성공 링크를 통해 상품 Master로 이동한 뒤 새 품번을 검색했고, Product 360의 `SKU 구성 (BOM)`에서 새 SKU와 수량을 확인했다. SKU Master 검색에서도 같은 SKU가 보였다. 이는 실제 Development 원격 데이터를 읽은 UI 결과다.
+
+별도 서버 검증된 충돌 fixture는 동일 품번에 다른 Product명을 사용했다. Preview `CONFLICT 1`/`canApply=false`, ADMIN Apply 거부, 기존 Product명 불변을 확인했다. EDITOR는 실제 Auth 세션에서 Preview 허용·Apply 거부, VIEWER와 DISABLED는 Preview·Apply 모두 거부됐다. 다른 QA Workspace의 정확한 Batch ID를 대상으로 한 ADMIN Preview·Apply도 거부됐다.
+
+최종 통과 fixture의 정확한 Master UUID는 Product `62c47fec-f3cb-4603-a55b-9bfa816a1b61`, SKU `97ced05b-fc85-4590-bed7-11ecb2a1f953`, ProductComponent `212fc8fc-b0f0-4c1a-8765-fa20d7365590`이었다. Batch는 `0cc48897-03d4-421a-ba78-96336c198329`, `60f27433-9331-4ea8-957f-38059a63a6f4`, SourceFile은 `bb4e1c52-b720-4660-83f0-d96779d5979e`, `75a675d9-bd0a-4f51-a953-27fe974c8651`이었다. 스크립트가 이들과 연결된 Raw/Candidate/Issue/ActivityLog의 정확한 UUID 및 두 Storage object path를 기록하고 FK 역순으로 정리했다. 사후 모든 해당 UUID·object 조회는 0건이며, Workspace의 Product/SKU/BOM/Batch/Raw/Candidate/Issue/ActivityLog/SourceFile count는 인수 전후 모두 0건으로 일치했다. 테스트 중 중단된 두 이전 fixture도 각각 정확한 ID로 정리해 전후 count 0을 확인했다. 광범위 prefix 삭제는 사용하지 않았다.
+
+로컬 PGlite는 11개 Migration과 새 Preview/Apply 계약을 통과했다. unit 64건, 기본 Chromium E2E 16건, Supabase 모의 E2E 21건, typecheck, lint, build도 통과했다. 실제 제공된 Master Workbook을 로컬에서 재분석해 `100526` 중복 7개가 모두 ERROR, `AL24` BOM이 ERROR, `AL510` SKU가 DEFERRED, BOM 수량 불일치 이슈가 8건임을 확인했다. 이들을 자동 NEW로 승격하지 않았다.
+
+Migration 전후 Security Advisor는 같은 기존 `Leaked Password Protection Disabled` WARN 한 건만 보고했다. 새 보안 finding은 0건이다. Performance Advisor의 미색인 FK INFO 5건은 전후 동일하며 신규 성능 경고는 없다. 기존 warning의 [Supabase 설정 안내](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection)는 별도 Pilot 운영 결정 사항이다.
+
+```text
+LOCAL 6A = PASS
+REMOTE APPLY CONTRACT = PASS
+REMOTE UI END-TO-END = PASS
+REMOTE CLEANUP = PASS
+OVERALL 6A = GO (Development Pilot only)
+```
+
+6A GO는 Development에서 이 한 흐름을 실제로 수행할 수 있다는 의미다. 기존 Master UPDATE/DELETE, 정식 Approval, `READY_TO_APPLY`, validation revision 2와 Production readiness를 뜻하지 않는다.

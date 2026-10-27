@@ -2,13 +2,14 @@
 
 ## Purpose and Status
 
-Supabase 모드의 ADMIN과 EDITOR는 브라우저 Master Workbook Dry-run 결과를 중앙 Import 기록으로 저장하고 함께 검토할 수 있다. 저장 범위는 `ImportBatch`, `RawImportRow`, `ImportCandidate`, `ImportValidationIssue`, `IMPORT_VALIDATED` ActivityLog다. ADMIN은 Candidate reviewed override와 Issue decision을 별도 `IMPORT_REVIEWED` 이력으로 저장할 수 있다.
+Supabase 모드의 ADMIN과 EDITOR는 브라우저 Master Workbook Dry-run 결과를 중앙 Import 기록으로 저장하고 함께 검토할 수 있다. 저장 범위는 `ImportBatch`, `RawImportRow`, `ImportCandidate`, `ImportValidationIssue`, `IMPORT_VALIDATED` ActivityLog다. ADMIN은 Candidate reviewed override와 Issue decision을 별도 `IMPORT_REVIEWED` 이력으로 저장할 수 있다. 저장된 검증 Batch는 6A Pilot Apply의 입력이 된다. 적용 규칙은 [Pilot Master Apply](PILOT_MASTER_APPLY.md)에 별도로 기록한다.
 
 ```text
 LOCAL 5E IMPLEMENTATION = GO
 REMOTE 5D ACCEPTANCE = GO (PROJECT OWNER REPORTED, 2026-10-25)
 REMOTE 5E ACCEPTANCE = GO
 REMOTE 5F ACCEPTANCE = GO (EXACT FIXTURE CLEANUP PASS)
+REMOTE 6A ACCEPTANCE = GO (CREATE-ONLY APPLY + EXACT FIXTURE CLEANUP PASS)
 ```
 
 5D 프로젝트 identity와 기존 remote migration 5개는 read-only 연결로 확인했다. 5D Auth/RLS/RPC 동작 결과는 프로젝트 소유자가 제공한 결과다. 자세한 범위는 [Remote Acceptance](../SUPABASE_REMOTE_ACCEPTANCE.md)를 참고한다.
@@ -26,11 +27,13 @@ REMOTE 5F ACCEPTANCE = GO (EXACT FIXTURE CLEANUP PASS)
 → Batch + Raw + Candidate + Issue + IMPORT_VALIDATED
 → ADMIN Human Review
 → reviewed override 또는 Issue decision + IMPORT_REVIEWED
+→ 적용 미리보기 + ADMIN 확인
+→ Product / SKU / BOM create-only Apply + IMPORT_APPLIED
 ```
 
 한 persistence RPC transaction에서 Batch, Raw, Candidate, Issue와 ActivityLog를 생성한다. 후보 count 불일치, 잘못된 Candidate shape/status/kind 또는 존재하지 않는 Raw 좌표가 하나라도 있으면 전체 작업을 rollback한다. 같은 파일 hash의 재검증은 새 Batch로 저장할 수 있다.
 
-Mock 모드는 브라우저 Dry-run만 제공한다. 중앙 persistence와 Human Review는 Supabase 모드에서만 사용할 수 있다.
+Mock 모드는 브라우저 Dry-run만 제공한다. 중앙 persistence, Human Review와 Pilot Apply는 Supabase 모드에서만 사용할 수 있다.
 
 ## Migration
 
@@ -71,7 +74,7 @@ DB는 다음 값을 고정한다.
 | `parser_version` | `master-v1.0.0` |
 | Batch `status` | `REVIEW_REQUIRED` |
 | `validation_revision` | `1` |
-| apply 관련 count | 모두 `0` |
+| 저장 직후 apply 관련 count | 모두 `0` |
 
 ## Candidate Snapshot
 
@@ -136,12 +139,12 @@ Issue review 상태는 `OPEN`, `RESOLVED`, `ACKNOWLEDGED`, `DEFERRED`다. non-OP
 
 ## Batch and Revision Semantics
 
-Human Review 전후 모든 Master Batch는 `REVIEW_REQUIRED`다. Candidate override 또는 Issue `RESOLVED`가 있어도 다음 값으로 전환하지 않는다.
+Human Review 전후 Master Batch는 `REVIEW_REQUIRED`다. Candidate override 또는 Issue `RESOLVED`만으로 상태를 변경하지 않는다. 6A에서 별도 ADMIN Apply를 성공하면 `APPLIED` 또는 `PARTIALLY_APPLIED`로 직접 전환한다. 다음 Approval 경로는 여전히 사용하지 않는다.
 
 ```text
 READY_TO_APPLY
 APPLYING
-APPLIED
+정식 Approval
 ```
 
 `candidate_status`는 validation revision 시점의 immutable 판정이다. reviewed value와 Issue decision은 판정을 덮어쓰지 않는다. 후속 revalidation은 새 `validation_revision` Candidate snapshot을 추가해야 하며 5E는 revision 2 생성을 구현하지 않는다.
@@ -171,11 +174,11 @@ Candidate/Issue review 성공 시 대상 entity로 `IMPORT_REVIEWED`를 한 건 
 
 ## Client-observed Hash and Storage Boundary
 
-5E 이전 Batch의 `source_file_hash`는 client-observed SHA-256이다. 5F의 새 Batch는 private Storage 원본을 서버가 읽어 계산한 SHA-256을 기록하며 `source_file_id`와 `SERVER_VERIFIED` trust flag를 가진다. 원본 검증이나 Human Review만으로 Apply 신뢰 근거가 완성되지는 않는다.
+5E 이전 Batch의 `source_file_hash`는 client-observed SHA-256이다. 5F의 새 Batch는 private Storage 원본을 서버가 읽어 계산한 SHA-256을 기록하며 `source_file_id`와 `SERVER_VERIFIED` trust flag를 가진다. 6A Apply는 SourceFile의 VERIFIED 상태와 서버 hash 일치를 transaction 안에서 다시 확인한다. 원본 검증이나 Human Review만으로 Apply가 자동 실행되지는 않는다.
 
 ## Master Data Protection
 
-Persistence와 review는 다음 table을 쓰지 않는다.
+Persistence와 review는 다음 table을 쓰지 않는다. 6A Apply만 별도 trusted RPC에서 `products`, `skus`, `product_components`의 새 행을 생성한다.
 
 ```text
 products
@@ -188,7 +191,7 @@ aliases
 audit_issues
 ```
 
-Human Review는 Master 변경, diff, approval 또는 Apply가 아니다.
+Human Review는 Master 변경, diff, approval 또는 Apply가 아니다. 6A는 기존 Master를 수정하거나 삭제하지 않고 값 충돌을 감지하면 전체 Apply를 거부한다.
 
 ## Security
 
@@ -200,21 +203,22 @@ Human Review는 Master 변경, diff, approval 또는 Apply가 아니다.
 
 ## Remote Acceptance
 
-5E 원격 인수는 ADMIN·EDITOR·VIEWER·DISABLED 실제 Auth/브라우저까지 GO다. 5F Migration 2개와 Edge Function 2개를 `selleraudit-dev`에 배포했고 원격 Storage/hash/역할 검증과 정확한 fixture cleanup이 통과했다. [Remote Acceptance](../SUPABASE_REMOTE_ACCEPTANCE.md)에 범위와 증거를 기록했다.
+5E 원격 인수는 ADMIN·EDITOR·VIEWER·DISABLED 실제 Auth/브라우저까지 GO다. 5F Migration 2개와 Edge Function 2개를 `selleraudit-dev`에 배포했고 원격 Storage/hash/역할 검증과 정확한 fixture cleanup이 통과했다. 6A Migration과 실제 브라우저 create-only Apply, Master 화면 조회·충돌 방지·정확한 fixture cleanup도 통과했다. [Remote Acceptance](../SUPABASE_REMOTE_ACCEPTANCE.md)에 범위와 증거를 기록했다.
 
 ```text
 REMOTE 5E ACCEPTANCE = GO
 REMOTE 5F ACCEPTANCE = GO
+REMOTE 6A ACCEPTANCE = GO
 ```
 
 5F 역할별 원격 결과와 정리 범위는 Remote Acceptance 문서에 별도로 기록한다.
 
 ## Current Stop Line
 
-5F는 private 원본 보관·서버 hash 검증·검증된 중앙 저장·Human Review 기록까지다. 다음 기능은 구현하지 않는다.
+5F는 private 원본 보관·서버 hash 검증·검증된 중앙 저장·Human Review 기록까지였고, 6A는 Development에서 create-only Master Apply를 추가한다. 다음 기능은 구현하지 않는다.
 
-- Product, SKU, ProductComponent INSERT/UPDATE 또는 automatic correction
-- Master diff, approval, `READY_TO_APPLY`, Apply 또는 merge
+- 기존 Product, SKU, ProductComponent UPDATE/DELETE 또는 automatic correction
+- 정식 approval, `READY_TO_APPLY` 또는 기존 Master merge
 - revalidation revision 2 생성과 Candidate status 자동 변경
 - Sales, Marketing, Barcode 또는 Channel Import persistence
 - Production 배포

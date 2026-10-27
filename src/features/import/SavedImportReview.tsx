@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DataTable, Drawer, EmptyState, StatusBadge } from '../../components/ui'
-import type { ImportPersistence, SavedImportBatch, SavedImportCandidate, SavedImportIssue, SavedImportSource, SavedRawImportRow } from '../../services/importPersistence'
+import type { ImportPersistence, MasterImportApplyPreview, MasterImportApplyResult, MasterImportApplyStatus, SavedImportBatch, SavedImportCandidate, SavedImportIssue, SavedImportSource, SavedRawImportRow } from '../../services/importPersistence'
 
 type ReviewRole = 'ADMIN' | 'EDITOR'
 type CandidateKindFilter = 'ALL' | SavedImportCandidate['kind']
@@ -13,6 +13,11 @@ const source = (sheet: string, row: number | null) => `${sheet} / ${row === null
 const observed = (value: unknown) => value === null || value === undefined || value === '' ? '—' : Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : String(value)
 const kindLabel: Record<SavedImportCandidate['kind'], string> = { PRODUCT: 'Product', SKU: 'SKU', BOM_COMPONENT: 'BOM' }
 const statusLabel: Record<string, string> = { VALID: '정상', WARNING: '주의', ERROR: '오류', DEFERRED: '보류', OPEN: '미처리', RESOLVED: '해결', ACKNOWLEDGED: '확인' }
+const applyStatusLabel: Record<MasterImportApplyStatus, string> = {
+  NEW: '신규', UNCHANGED: '동일', CONFLICT: '충돌', SKIPPED_WARNING: '주의 제외',
+  SKIPPED_ERROR: '오류 제외', SKIPPED_DEFERRED: '보류 제외',
+  SKIPPED_INVALID: '유효성 제외', SKIPPED_DEPENDENCY: '연결 제외',
+}
 const issueStatusOptions: { value: IssueReviewStatus; label: string }[] = [
   { value: 'RESOLVED', label: '해결' }, { value: 'ACKNOWLEDGED', label: '확인' },
   { value: 'DEFERRED', label: '보류' }, { value: 'OPEN', label: '다시 열기' },
@@ -107,8 +112,49 @@ function IssueDetail({ issue, rawRow, loading, error, role, saving, saveError, o
   </Drawer>
 }
 
+function ApplyConfirmation({ preview, busy, onClose, onConfirm }: {
+  preview: MasterImportApplyPreview; busy: boolean; onClose: () => void; onConfirm: () => void
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => { ref.current?.showModal() }, [])
+  const skipped = preview.productSkipped + preview.skuSkipped + preview.bomSkipped
+  return <dialog ref={ref} className="confirm-dialog" aria-labelledby="master-apply-confirm-title" onCancel={event => { event.preventDefault(); if (!busy) onClose() }}>
+    <h2 id="master-apply-confirm-title">Master에 적용</h2>
+    <p>이 작업은 Product / SKU / BOM Master에 실제 데이터를 생성합니다. 기존 Master 데이터는 수정하거나 삭제하지 않습니다.</p>
+    <dl className="import-apply-confirm-counts"><div><dt>신규 Product</dt><dd>{count(preview.productNew)}</dd></div><div><dt>신규 SKU</dt><dd>{count(preview.skuNew)}</dd></div><div><dt>신규 BOM</dt><dd>{count(preview.bomNew)}</dd></div><div><dt>제외 Candidate</dt><dd>{count(skipped)}</dd></div></dl>
+    <p>계속하시겠습니까?</p>
+    <div className="dialog-actions"><button className="button" type="button" disabled={busy} onClick={onClose}>취소</button><button className="button button-primary" type="button" disabled={busy} onClick={onConfirm}>{busy ? '적용 중…' : '적용 확인'}</button></div>
+  </dialog>
+}
+
+function ApplyPreviewSection({ preview, loading, error, result, role, applying, onOpenConfirm }: {
+  preview: MasterImportApplyPreview | null; loading: boolean; error: string | null; result: MasterImportApplyResult | null
+  role: ReviewRole; applying: boolean; onOpenConfirm: () => void
+}) {
+  if (result) return <section className="import-apply-section" aria-label="Master 적용 결과"><div className="import-apply-success" role="status"><strong>Master 적용 완료</strong><span>Product {count(result.productNew)}건 · SKU {count(result.skuNew)}건 · BOM {count(result.bomNew)}건 생성</span><span>미적용 {count(result.remainingCount)}건 · Batch {result.finalBatchStatus}</span><a className="button button-primary" href="#/products" onClick={event => { event.preventDefault(); window.history.replaceState(null, '', '#/products'); window.location.reload() }}>상품 마스터 보기</a></div></section>
+  const conflicts = preview ? preview.productConflict + preview.skuConflict + preview.bomConflict : 0
+  const newCount = preview ? preview.productNew + preview.skuNew + preview.bomNew : 0
+  const canApply = Boolean(preview?.canApply && conflicts === 0 && preview.blockingBatchIssues === 0 && newCount > 0)
+  return <section className="import-apply-section" aria-label="Master 적용 미리보기">
+    <div className="section-heading"><div><h3>Master 적용 미리보기</h3><p>CREATE ONLY 규칙으로 Product, SKU, BOM의 적용 결과를 미리 계산합니다.</p></div>{role === 'EDITOR' && <span className="subtle-tag">미리보기만 가능</span>}</div>
+    {loading && <p className="import-section-state" role="status">Master 적용 미리보기를 계산하는 중입니다…</p>}
+    {error && <p className="import-error" role="alert">{error}</p>}
+    {!loading && !error && preview && <>
+      <div className="import-apply-grid">{([
+        ['Product', preview.productNew, preview.productUnchanged, preview.productConflict, preview.productSkipped],
+        ['SKU', preview.skuNew, preview.skuUnchanged, preview.skuConflict, preview.skuSkipped],
+        ['BOM', preview.bomNew, preview.bomUnchanged, preview.bomConflict, preview.bomSkipped],
+      ] as const).map(([label, added, unchanged, conflict, skipped]) => <div key={label}><strong>{label}</strong><span>신규 {count(added)}</span><span>동일 {count(unchanged)}</span><span className={conflict ? 'import-apply-conflict' : ''}>충돌 {count(conflict)}</span><span>제외 {count(skipped)}</span></div>)}</div>
+      {(preview.blockingBatchIssues > 0 || conflicts > 0) && <p className="import-blocked" role="note"><strong>Master 적용이 차단되었습니다.</strong>Batch 차단 이슈 {count(preview.blockingBatchIssues)}건 · 충돌 {count(conflicts)}건을 확인해 주세요.</p>}
+      {preview.rows.length > 0 && <DataTable minWidth={720}><thead><tr><th>Kind</th><th>Business Key</th><th>판정</th><th>사유</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.candidateId}><td>{kindLabel[row.kind]}</td><td className="mono">{row.businessKey}</td><td><StatusBadge status={row.status} label={applyStatusLabel[row.status]} /></td><td>{row.reason ?? '—'}</td></tr>)}</tbody></DataTable>}
+      <div className="import-apply-actions">{role === 'ADMIN' ? <button className="button button-primary" type="button" disabled={!canApply || applying} onClick={onOpenConfirm}>Master에 적용</button> : <p className="import-readonly-note">EDITOR는 적용 결과를 미리 볼 수 있지만 Master 적용은 실행할 수 없습니다.</p>}</div>
+    </>}
+  </section>
+}
+
 export function SavedImportReview({ persistence, refreshKey, role }: { persistence: ImportPersistence; refreshKey: number; role: ReviewRole }) {
   const batchRequest = useRef(0)
+  const previewRequest = useRef(0)
   const rawRequest = useRef(0)
   const selection = useRef({ batchId: null as string | null, version: 0 })
   const [batches, setBatches] = useState<readonly SavedImportBatch[]>([])
@@ -132,6 +178,12 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
   const [rawError, setRawError] = useState<string | null>(null)
   const [savingReview, setSavingReview] = useState(false)
   const [reviewError, setReviewError] = useState<string | null>(null)
+  const [applyPreview, setApplyPreview] = useState<MasterImportApplyPreview | null>(null)
+  const [loadingApplyPreview, setLoadingApplyPreview] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
+  const [applyResult, setApplyResult] = useState<MasterImportApplyResult | null>(null)
+  const [confirmApply, setConfirmApply] = useState(false)
+  const [applying, setApplying] = useState(false)
 
   const loadDetails = useCallback(async (batch: SavedImportBatch) => {
     const currentRequest = ++batchRequest.current
@@ -146,11 +198,34 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
   const openBatch = useCallback(async (batch: SavedImportBatch) => {
     selection.current = { batchId: batch.id, version: selection.current.version + 1 }
     ++rawRequest.current
+    const currentPreviewRequest = ++previewRequest.current
     setSelectedBatch(batch); setSelectedSource(null); setSourceError(null); setCandidates([]); setIssues([]); setKindFilter('ALL'); setStateFilter('ALL'); setCandidatePage(1); setSelectedCandidate(null); setSelectedIssue(null); setRawRow(null); setReviewError(null)
-    await Promise.all([loadDetails(batch), batch.sourceFileId ? persistence.loadSourceFile(batch.sourceFileId)
+    setApplyPreview(null); setApplyError(null); setApplyResult(null); setConfirmApply(false); setLoadingApplyPreview(true)
+    await Promise.all([loadDetails(batch), persistence.previewMasterImportApply(batch.id)
+      .then(next => { if (currentPreviewRequest === previewRequest.current && selection.current.batchId === batch.id) setApplyPreview(next) })
+      .catch(() => { if (currentPreviewRequest === previewRequest.current && selection.current.batchId === batch.id) setApplyError('Master 적용 미리보기를 불러오지 못했습니다.') })
+      .finally(() => { if (currentPreviewRequest === previewRequest.current && selection.current.batchId === batch.id) setLoadingApplyPreview(false) }), batch.sourceFileId ? persistence.loadSourceFile(batch.sourceFileId)
       .then(next => { if (selection.current.batchId === batch.id) setSelectedSource(next) })
       .catch(() => { if (selection.current.batchId === batch.id) setSourceError('원본 파일 검증 정보를 불러오지 못했습니다.') }) : Promise.resolve()])
   }, [loadDetails, persistence])
+
+  const applyBatch = async () => {
+    if (!selectedBatch || !applyPreview || role !== 'ADMIN') return
+    const batchId = selectedBatch.id
+    const selectionVersion = selection.current.version
+    setApplying(true); setApplyError(null)
+    try {
+      const next = await persistence.applyMasterImportBatch(batchId)
+      if (selection.current.batchId !== batchId || selection.current.version !== selectionVersion) return
+      setApplyResult(next); setConfirmApply(false)
+      setSelectedBatch(current => current?.id === batchId ? { ...current, status: next.finalBatchStatus } : current)
+      setBatches(current => current.map(batch => batch.id === batchId ? { ...batch, status: next.finalBatchStatus } : batch))
+    } catch {
+      if (selection.current.batchId === batchId && selection.current.version === selectionVersion) {
+        setConfirmApply(false); setApplyError('Master 적용에 실패했습니다. 최신 미리보기와 배치 상태를 다시 확인해 주세요.')
+      }
+    } finally { setApplying(false) }
+  }
 
   const downloadSource = async () => {
     if (!selectedBatch?.sourceFileId || selectedSource?.verificationStatus !== 'VERIFIED') return
@@ -243,7 +318,7 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
         <p className="import-readonly-note">Review 근거: 원본 ID, 서버 SHA-256, parser {selectedBatch.parserVersion || '이전 버전'}, validation r{selectedBatch.validationRevision}. 어느 하나가 달라지면 기존 검토를 새 분석의 승인 근거로 자동 재사용할 수 없습니다.</p>
       </section>
       <div className="import-saved-summary" aria-label="저장된 후보 판정 요약"><div><span>정상</span><strong>{count(selectedBatch.validCount)}</strong></div><div><span>주의</span><strong>{count(selectedBatch.warningCount)}</strong></div><div><span>오류</span><strong>{count(selectedBatch.errorCount)}</strong></div><div><span>보류</span><strong>{count(selectedBatch.deferredCount)}</strong></div></div>
-      <p className="import-limitation">이 화면은 Candidate Snapshot과 사람의 검토 결정을 기록합니다. Master Apply 기능은 없으며 Batch는 REVIEW_REQUIRED 상태를 유지합니다.</p>
+      <p className="import-limitation">Pilot Apply는 VALID Candidate만 CREATE ONLY로 반영합니다. 기존 Master 값은 수정하거나 삭제하지 않으며 충돌이 있으면 전체 적용을 시작하지 않습니다.</p>
       {loadingDetails && <p className="import-section-state" role="status">저장된 후보와 이슈를 불러오는 중입니다…</p>}{detailError && <p className="import-error import-section-state" role="alert">{detailError}</p>}
       {legacyBatch && <div className="import-legacy-notice" role="note"><strong>Candidate Snapshot이 없는 이전 Batch입니다.</strong><span>원본 Candidate 상세를 중앙 DB에서 재현할 수 없습니다. Raw 데이터로 과거 parser 결과를 추정하지 않습니다.</span></div>}
       {!loadingDetails && !detailError && !legacyBatch && <>
@@ -255,8 +330,10 @@ export function SavedImportReview({ persistence, refreshKey, role }: { persisten
         <div className="section-heading import-saved-issues-heading"><div><h3>저장된 검증 이슈</h3><p>이슈 결정과 원본 증거를 확인합니다.</p></div><span className="subtle-tag">{count(issues.length)} ISSUES</span></div>
         {!issues.length ? <EmptyState title="저장된 검증 이슈가 없습니다" /> : <DataTable minWidth={940}><thead><tr><th>심각도</th><th>코드</th><th>시트 / 행</th><th>원본 값</th><th>메시지</th><th>상태</th><th>검토</th></tr></thead><tbody>{issues.map(issue => <tr key={issue.id}><td><StatusBadge status={issue.severity} /></td><td className="mono">{issue.issueCode}</td><td>{source(issue.sourceSheet ?? '전체', issue.sourceRow)}</td><td className="import-observed">{observed(issue.observedValue)}</td><td>{issue.message}</td><td><StatusBadge status={issue.status} label={statusLabel[issue.status] ?? issue.status} /></td><td><button className="button button-small" type="button" onClick={() => openIssue(issue)}>이슈 상세</button></td></tr>)}</tbody></DataTable>}
       </>}
+      {!legacyBatch && <ApplyPreviewSection preview={applyPreview} loading={loadingApplyPreview} error={applyError} result={applyResult} role={role} applying={applying} onOpenConfirm={() => setConfirmApply(true)} />}
     </section>}
     {selectedCandidate && <CandidateDetail key={`${selectedCandidate.id}:${selectedCandidate.reviewRevision}`} candidate={selectedCandidate} issues={issues} rawRow={rawRow} loadingRaw={loadingRaw} rawError={rawError} role={reviewRole} saving={savingReview} saveError={reviewError} onSave={saveCandidate} onClose={closeDrawer} />}
     {selectedIssue && <IssueDetail key={`${selectedIssue.id}:${selectedIssue.reviewRevision}`} issue={selectedIssue} rawRow={rawRow} loading={loadingRaw} error={rawError} role={reviewRole} saving={savingReview} saveError={reviewError} onSave={saveIssue} onClose={closeDrawer} />}
+    {confirmApply && applyPreview && <ApplyConfirmation preview={applyPreview} busy={applying} onClose={() => setConfirmApply(false)} onConfirm={() => void applyBatch()} />}
   </section>
 }

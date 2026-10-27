@@ -66,7 +66,8 @@ test('master dry-run creates provenance-safe Product, SKU, and BOM candidates', 
   expect(preview.skus).toHaveLength(4)
   expect(preview.bomComponents).toHaveLength(1)
   expect(preview.products[0]).toEqual(expect.objectContaining({
-    sabangnetCode: '100051', productName: '점보', sourceSheet: '단가표', sourceRow: 6, status: 'VALID',
+    sabangnetCode: '100051', productName: '점보', productType: 'SINGLE',
+    sourceSheet: '단가표', sourceRow: 6, status: 'VALID',
   }))
   expect(preview.skus).toContainEqual(expect.objectContaining({ skuCode: 'AL00', modelName: '점보', sourceRow: 23 }))
   expect(preview.skus).toContainEqual(expect.objectContaining({

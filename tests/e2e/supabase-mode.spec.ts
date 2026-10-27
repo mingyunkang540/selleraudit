@@ -16,6 +16,10 @@ type ImportFixture = {
   candidateReviews?: Array<Record<string, unknown>>
   issueReviews?: Array<Record<string, unknown>>
   sources?: Record<string, Record<string, unknown>>
+  applyPreviewsByBatch?: Record<string, Record<string, unknown>>
+  applyResultsByBatch?: Record<string, Record<string, unknown>>
+  previewGateByBatch?: Record<string, Promise<void>>
+  applyCalls?: Array<Record<string, unknown>>
 }
 
 const user = {
@@ -172,6 +176,25 @@ async function installFakeSupabase(page: Page, workspaces: WorkspaceFixture[], i
       imports.issueReviews?.push(payload)
       return json(route, null)
     }
+    if (table === 'rpc/preview_master_import_apply') {
+      const payload = request.postDataJSON() as Record<string, unknown>
+      const batchId = String(payload.p_batch_id)
+      if (imports.previewGateByBatch?.[batchId]) await imports.previewGateByBatch[batchId]
+      const preview = imports.applyPreviewsByBatch?.[batchId]
+      return preview ? json(route, preview) : json(route, { message: 'preview unavailable' }, 400)
+    }
+    if (table === 'rpc/apply_master_import_batch') {
+      const payload = request.postDataJSON() as Record<string, unknown>
+      const batchId = String(payload.p_batch_id)
+      const result = imports.applyResultsByBatch?.[batchId]
+      if (!result) return json(route, { message: 'apply unavailable' }, 400)
+      imports.applyCalls?.push(payload)
+      const batch = imports.batches.find(item => item.id === batchId)
+      if (batch) batch.status = result.finalBatchStatus
+      const workspace = workspaces.find(item => item.id === batch?.workspace_id)
+      if (workspace && Number(result.productNew) > 0) workspace.productName = '신규 적용 상품'
+      return json(route, result)
+    }
     if (table === 'workspace_members') {
       return json(route, workspaces.map(workspace => ({ workspace_id: workspace.id, role: workspace.role, status: 'ACTIVE' })))
     }
@@ -319,6 +342,34 @@ function savedReviewFixture(): ImportFixture {
     issueReviews: [],
     rawReads: { count: 0 },
   }
+}
+
+function applyPreview(batchId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    batchId, canApply: true,
+    productNew: 1, productUnchanged: 0, productConflict: 0, productSkipped: 0,
+    skuNew: 1, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
+    bomNew: 1, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
+    blockingBatchIssues: 0,
+    rows: [
+      { candidateId: 'candidate-product', kind: 'PRODUCT', status: 'NEW', businessKey: '100001' },
+      { candidateId: 'candidate-sku', kind: 'SKU', status: 'NEW', businessKey: 'AL00' },
+      { candidateId: 'candidate-bom', kind: 'BOM_COMPONENT', status: 'NEW', businessKey: '100001 / AL00' },
+    ],
+    ...overrides,
+  }
+}
+
+function withApplyPreview(imports: ImportFixture, batchId = 'batch-review') {
+  imports.applyPreviewsByBatch = { [batchId]: applyPreview(batchId) }
+  imports.applyResultsByBatch = { [batchId]: {
+    batchId, productNew: 1, productUnchanged: 0, productConflict: 0, productSkipped: 0,
+    skuNew: 1, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
+    bomNew: 1, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
+    blockingBatchIssues: 0, finalBatchStatus: 'APPLIED', appliedCount: 3, remainingCount: 0,
+  } }
+  imports.applyCalls = []
+  return imports
 }
 
 test('shows the login gate when no Supabase session exists', async ({ page }) => {
@@ -592,6 +643,83 @@ test('EDITOR can inspect candidate evidence but cannot edit reviews', async ({ p
   await expect(parserValues.getByText('100526', { exact: true })).toBeVisible()
   await expect(drawer.getByRole('button', { name: '검토 저장' })).toHaveCount(0)
   await expect(drawer.getByLabel('사방넷 품번')).toHaveCount(0)
+})
+
+test('ADMIN can confirm Pilot Apply and open the Product master from the success result', async ({ page }) => {
+  const imports = withApplyPreview(savedReviewFixture())
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Apply Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+
+  const preview = page.getByRole('region', { name: 'Master 적용 미리보기' })
+  await expect(preview).toContainText('Product')
+  await expect(preview).toContainText('100001')
+  await preview.getByRole('button', { name: 'Master에 적용' }).click()
+  const confirmation = page.getByRole('dialog', { name: 'Master에 적용' })
+  await expect(confirmation).toContainText('기존 Master 데이터는 수정하거나 삭제하지 않습니다.')
+  await expect(confirmation).toContainText('신규 Product')
+  await confirmation.getByRole('button', { name: '적용 확인' }).click()
+
+  const result = page.getByRole('region', { name: 'Master 적용 결과' })
+  await expect(result).toContainText('Master 적용 완료')
+  await expect(result).toContainText('Product 1건 · SKU 1건 · BOM 1건 생성')
+  expect(imports.applyCalls).toEqual([{ p_batch_id: 'batch-review' }])
+  await result.getByRole('link', { name: '상품 마스터 보기' }).click()
+  await expect(page).toHaveURL(/#\/products$/)
+  await expect(page.getByRole('heading', { level: 1, name: '판매상품 마스터' })).toBeVisible()
+  await expect(page.getByText('신규 적용 상품', { exact: true })).toBeVisible()
+})
+
+test('EDITOR sees Apply Preview without an Apply button, and conflicts disable ADMIN Apply', async ({ page }) => {
+  const editorImports = withApplyPreview(savedReviewFixture())
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Apply Workspace', role: 'EDITOR' }], editorImports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  const editorPreview = page.getByRole('region', { name: 'Master 적용 미리보기' })
+  await expect(editorPreview.getByText('미리보기만 가능')).toBeVisible()
+  await expect(editorPreview.getByRole('button', { name: 'Master에 적용' })).toHaveCount(0)
+
+  const conflictImports = withApplyPreview(savedReviewFixture())
+  conflictImports.applyPreviewsByBatch!['batch-review'] = applyPreview('batch-review', {
+    canApply: false, productNew: 0, productConflict: 1,
+    rows: [{ candidateId: 'candidate-product', kind: 'PRODUCT', status: 'CONFLICT', businessKey: '100526', reason: '기존 상품명이 다릅니다.' }],
+  })
+  await page.unrouteAll({ behavior: 'wait' })
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Apply Workspace', role: 'ADMIN' }], conflictImports)
+  await page.reload()
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  const conflictPreview = page.getByRole('region', { name: 'Master 적용 미리보기' })
+  await expect(conflictPreview).toContainText('Master 적용이 차단되었습니다.')
+  await expect(conflictPreview.getByRole('button', { name: 'Master에 적용' })).toBeDisabled()
+})
+
+test('a delayed preview from the previous batch cannot replace the current batch preview', async ({ page }) => {
+  const imports = savedReviewFixture()
+  let releaseFirst!: () => void
+  const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+  const secondBatch = { ...imports.batches[0], id: 'batch-second', source_filename: 'second-master.xlsx' }
+  imports.batches.push(secondBatch)
+  imports.candidatesByBatch!['batch-second'] = [{
+    ...imports.candidatesByBatch!['batch-review'][0], id: 'candidate-second', import_batch_id: 'batch-second',
+  }]
+  imports.issuesByBatch!['batch-second'] = []
+  imports.applyPreviewsByBatch = {
+    'batch-review': applyPreview('batch-review', { rows: [{ candidateId: 'first', kind: 'PRODUCT', status: 'NEW', businessKey: 'FIRST-STALE' }] }),
+    'batch-second': applyPreview('batch-second', { rows: [{ candidateId: 'second', kind: 'PRODUCT', status: 'NEW', businessKey: 'SECOND-CURRENT' }] }),
+  }
+  imports.previewGateByBatch = { 'batch-review': firstGate }
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Apply Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  await page.getByRole('button', { name: 'second-master.xlsx 배치 상세 보기' }).click()
+  const detail = page.getByRole('region', { name: '저장된 Batch 상세' })
+  await expect(detail).toContainText('SECOND-CURRENT')
+  releaseFirst()
+  await expect(detail).toContainText('SECOND-CURRENT')
+  await expect(detail).not.toContainText('FIRST-STALE')
 })
 
 test('shows the snapshot unavailable notice for a legacy batch without candidates', async ({ page }) => {

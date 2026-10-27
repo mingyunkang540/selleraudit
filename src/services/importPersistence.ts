@@ -95,6 +95,48 @@ export interface SavedRawImportRow {
   rawCells: RawImportCell[]
 }
 
+export type MasterImportApplyKind = 'PRODUCT' | 'SKU' | 'BOM_COMPONENT'
+export type MasterImportApplyStatus = 'NEW' | 'UNCHANGED' | 'CONFLICT' |
+  'SKIPPED_WARNING' | 'SKIPPED_ERROR' | 'SKIPPED_DEFERRED' |
+  'SKIPPED_INVALID' | 'SKIPPED_DEPENDENCY'
+
+export interface MasterImportApplyRow {
+  candidateId: string
+  kind: MasterImportApplyKind
+  status: MasterImportApplyStatus
+  businessKey: string
+  reason?: string
+}
+
+export interface MasterImportApplyCounts {
+  productNew: number
+  productUnchanged: number
+  productConflict: number
+  productSkipped: number
+  skuNew: number
+  skuUnchanged: number
+  skuConflict: number
+  skuSkipped: number
+  bomNew: number
+  bomUnchanged: number
+  bomConflict: number
+  bomSkipped: number
+  blockingBatchIssues: number
+}
+
+export interface MasterImportApplyPreview extends MasterImportApplyCounts {
+  batchId: string
+  canApply: boolean
+  rows: MasterImportApplyRow[]
+}
+
+export interface MasterImportApplyResult extends MasterImportApplyCounts {
+  batchId: string
+  finalBatchStatus: 'APPLIED' | 'PARTIALLY_APPLIED'
+  appliedCount: number
+  remainingCount: number
+}
+
 export interface ImportPersistence {
   prepareSourceFile(file: File, hash: string, onStage?: (stage: 'UPLOADING' | 'VERIFYING') => void): Promise<VerifiedImportSource>
   saveMasterDryRun(preview: MasterImportPreview, sourceFileId: string, hash: string): Promise<string>
@@ -108,6 +150,8 @@ export interface ImportPersistence {
     reviewedValues: Record<string, unknown>, resolution: string): Promise<void>
   reviewIssue(issueId: string, expectedValidationRevision: number, expectedReviewRevision: number,
     status: IssueReviewStatus, resolution: string | null): Promise<void>
+  previewMasterImportApply(batchId: string): Promise<MasterImportApplyPreview>
+  applyMasterImportBatch(batchId: string): Promise<MasterImportApplyResult>
 }
 
 export class ImportPersistenceError extends Error {
@@ -162,6 +206,49 @@ function count(row: Row, key: string): number {
   const value = row[key]
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw new Error(`Invalid ${key}`)
   return value
+}
+
+const applyCountKeys = [
+  'productNew', 'productUnchanged', 'productConflict', 'productSkipped',
+  'skuNew', 'skuUnchanged', 'skuConflict', 'skuSkipped',
+  'bomNew', 'bomUnchanged', 'bomConflict', 'bomSkipped', 'blockingBatchIssues',
+] as const
+
+function mapApplyCounts(row: Row): MasterImportApplyCounts {
+  return Object.fromEntries(applyCountKeys.map(key => [key, count(row, key)])) as unknown as MasterImportApplyCounts
+}
+
+function mapApplyRow(value: unknown): MasterImportApplyRow {
+  if (!isRow(value)) throw new Error('Invalid apply row')
+  const kind = field(value, 'kind')
+  const status = field(value, 'status')
+  if (!['PRODUCT', 'SKU', 'BOM_COMPONENT'].includes(kind) || ![
+    'NEW', 'UNCHANGED', 'CONFLICT', 'SKIPPED_WARNING', 'SKIPPED_ERROR',
+    'SKIPPED_DEFERRED', 'SKIPPED_INVALID', 'SKIPPED_DEPENDENCY',
+  ].includes(status)) throw new Error('Invalid apply row state')
+  const reason = value.reason == null ? undefined : field(value, 'reason')
+  return {
+    candidateId: field(value, 'candidateId'), kind: kind as MasterImportApplyKind,
+    status: status as MasterImportApplyStatus, businessKey: field(value, 'businessKey'),
+    ...(reason ? { reason } : {}),
+  }
+}
+
+function mapApplyPreview(data: unknown, batchId: string): MasterImportApplyPreview {
+  if (!isRow(data) || field(data, 'batchId') !== batchId || typeof data.canApply !== 'boolean' || !Array.isArray(data.rows)) {
+    throw new Error('Invalid apply preview')
+  }
+  return { batchId, canApply: data.canApply, ...mapApplyCounts(data), rows: data.rows.map(mapApplyRow) }
+}
+
+function mapApplyResult(data: unknown, batchId: string): MasterImportApplyResult {
+  if (!isRow(data) || field(data, 'batchId') !== batchId) throw new Error('Invalid apply result')
+  const finalBatchStatus = field(data, 'finalBatchStatus')
+  if (!['APPLIED', 'PARTIALLY_APPLIED'].includes(finalBatchStatus)) throw new Error('Invalid final batch status')
+  return {
+    batchId, ...mapApplyCounts(data), finalBatchStatus: finalBatchStatus as MasterImportApplyResult['finalBatchStatus'],
+    appliedCount: count(data, 'appliedCount'), remainingCount: count(data, 'remainingCount'),
+  }
 }
 
 function optionalRowNumber(row: Row, key: string): number | null {
@@ -570,6 +657,22 @@ export function createImportPersistence({ supabase, workspaceId }: {
         })
         if (error) throw error
       } catch (error) { throw normalizeError(error, '이슈 검토 저장에 실패했습니다. 최신 기록을 다시 확인해 주세요.') }
+    },
+    async previewMasterImportApply(batchId) {
+      if (!batchId.trim()) throw new ImportPersistenceError('저장 기록을 선택해 주세요.')
+      try {
+        const { data, error } = await supabase.rpc('preview_master_import_apply', { p_batch_id: batchId })
+        if (error) throw error
+        return mapApplyPreview(data, batchId)
+      } catch (error) { throw normalizeError(error, 'Master 적용 미리보기를 불러오지 못했습니다.') }
+    },
+    async applyMasterImportBatch(batchId) {
+      if (!batchId.trim()) throw new ImportPersistenceError('저장 기록을 선택해 주세요.')
+      try {
+        const { data, error } = await supabase.rpc('apply_master_import_batch', { p_batch_id: batchId })
+        if (error) throw error
+        return mapApplyResult(data, batchId)
+      } catch (error) { throw normalizeError(error, 'Master 적용에 실패했습니다. 배치 상태와 충돌 여부를 다시 확인해 주세요.') }
     },
   }
 }
