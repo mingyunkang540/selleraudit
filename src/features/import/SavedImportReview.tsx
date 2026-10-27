@@ -14,7 +14,7 @@ const observed = (value: unknown) => value === null || value === undefined || va
 const kindLabel: Record<SavedImportCandidate['kind'], string> = { PRODUCT: 'Product', SKU: 'SKU', BOM_COMPONENT: 'BOM' }
 const statusLabel: Record<string, string> = { VALID: '정상', WARNING: '주의', ERROR: '오류', DEFERRED: '보류', OPEN: '미처리', RESOLVED: '해결', ACKNOWLEDGED: '확인' }
 const applyStatusLabel: Record<MasterImportApplyStatus, string> = {
-  NEW: '신규', UNCHANGED: '동일', CONFLICT: '충돌', SKIPPED_WARNING: '주의 제외',
+  NEW: '신규', UPDATE: '변경', UNCHANGED: '동일', CONFLICT: '충돌', SKIPPED_WARNING: '주의 제외',
   SKIPPED_ERROR: '오류 제외', SKIPPED_DEFERRED: '보류 제외',
   SKIPPED_INVALID: '유효성 제외', SKIPPED_DEPENDENCY: '연결 제외',
 }
@@ -33,6 +33,9 @@ const nullableReviewField = (kind: SavedImportCandidate['kind'], key: string) =>
 const fieldLabel: Record<string, string> = {
   sabangnetCode: '사방넷 품번', productName: '상품명', category: '카테고리', productType: '상품 구분', rawBomText: '원본 BOM 문자열',
   sourceQuantity: '원본 수량', sourceChannel: '원본 채널', skuCode: 'SKU 코드', modelName: '모델명', color: '색상', sourceCategory: '원본 카테고리', quantity: '수량',
+}
+const applyFieldLabel: Record<string, string> = {
+  productName: '상품명', category: '카테고리', modelName: '모델명', color: '색상', quantity: '수량',
 }
 
 function candidateBusinessKey(candidate: SavedImportCandidate): string {
@@ -120,8 +123,9 @@ function ApplyConfirmation({ preview, busy, onClose, onConfirm }: {
   const skipped = preview.productSkipped + preview.skuSkipped + preview.bomSkipped
   return <dialog ref={ref} className="confirm-dialog" aria-labelledby="master-apply-confirm-title" onCancel={event => { event.preventDefault(); if (!busy) onClose() }}>
     <h2 id="master-apply-confirm-title">Master에 적용</h2>
-    <p>이 작업은 Product / SKU / BOM Master에 실제 데이터를 생성합니다. 기존 Master 데이터는 수정하거나 삭제하지 않습니다.</p>
-    <dl className="import-apply-confirm-counts"><div><dt>신규 Product</dt><dd>{count(preview.productNew)}</dd></div><div><dt>신규 SKU</dt><dd>{count(preview.skuNew)}</dd></div><div><dt>신규 BOM</dt><dd>{count(preview.bomNew)}</dd></div><div><dt>제외 Candidate</dt><dd>{count(skipped)}</dd></div></dl>
+    <p>이 작업은 Product / SKU / BOM Master 데이터를 실제로 생성하거나 변경합니다.</p>
+    <dl className="import-apply-confirm-counts"><div><dt>신규 Product</dt><dd>{count(preview.productNew)}</dd></div><div><dt>변경 Product</dt><dd>{count(preview.productUpdate)}</dd></div><div><dt>신규 SKU</dt><dd>{count(preview.skuNew)}</dd></div><div><dt>변경 SKU</dt><dd>{count(preview.skuUpdate)}</dd></div><div><dt>신규 BOM</dt><dd>{count(preview.bomNew)}</dd></div><div><dt>변경 BOM</dt><dd>{count(preview.bomUpdate)}</dd></div><div><dt>제외 Candidate</dt><dd>{count(skipped)}</dd></div></dl>
+    <p className="import-no-delete">삭제되는 데이터는 없습니다.</p>
     <p>계속하시겠습니까?</p>
     <div className="dialog-actions"><button className="button" type="button" disabled={busy} onClick={onClose}>취소</button><button className="button button-primary" type="button" disabled={busy} onClick={onConfirm}>{busy ? '적용 중…' : '적용 확인'}</button></div>
   </dialog>
@@ -131,22 +135,23 @@ function ApplyPreviewSection({ preview, loading, error, result, role, applying, 
   preview: MasterImportApplyPreview | null; loading: boolean; error: string | null; result: MasterImportApplyResult | null
   role: ReviewRole; applying: boolean; onOpenConfirm: () => void
 }) {
-  if (result) return <section className="import-apply-section" aria-label="Master 적용 결과"><div className="import-apply-success" role="status"><strong>Master 적용 완료</strong><span>Product {count(result.productNew)}건 · SKU {count(result.skuNew)}건 · BOM {count(result.bomNew)}건 생성</span><span>미적용 {count(result.remainingCount)}건 · Batch {result.finalBatchStatus}</span><a className="button button-primary" href="#/products" onClick={event => { event.preventDefault(); window.history.replaceState(null, '', '#/products'); window.location.reload() }}>상품 마스터 보기</a></div></section>
+  if (result) return <section className="import-apply-section" aria-label="Master 적용 결과"><div className="import-apply-success" role="status"><strong>Master 적용 완료</strong><span>Product 신규 {count(result.productNew)} / 변경 {count(result.productUpdate)}</span><span>SKU 신규 {count(result.skuNew)} / 변경 {count(result.skuUpdate)}</span><span>BOM 신규 {count(result.bomNew)} / 변경 {count(result.bomUpdate)}</span><span>미적용 {count(result.remainingCount)}건 · Batch {result.finalBatchStatus}</span><a className="button button-primary" href="#/products" onClick={event => { event.preventDefault(); window.history.replaceState(null, '', '#/products'); window.location.reload() }}>상품 마스터 보기</a></div></section>
   const conflicts = preview ? preview.productConflict + preview.skuConflict + preview.bomConflict : 0
-  const newCount = preview ? preview.productNew + preview.skuNew + preview.bomNew : 0
-  const canApply = Boolean(preview?.canApply && conflicts === 0 && preview.blockingBatchIssues === 0 && newCount > 0)
+  const actionableCount = preview ? preview.productNew + preview.productUpdate + preview.skuNew + preview.skuUpdate + preview.bomNew + preview.bomUpdate : 0
+  const canApply = Boolean(preview?.canApply && conflicts === 0 && preview.blockingBatchIssues === 0 && actionableCount > 0)
   return <section className="import-apply-section" aria-label="Master 적용 미리보기">
-    <div className="section-heading"><div><h3>Master 적용 미리보기</h3><p>CREATE ONLY 규칙으로 Product, SKU, BOM의 적용 결과를 미리 계산합니다.</p></div>{role === 'EDITOR' && <span className="subtle-tag">미리보기만 가능</span>}</div>
+    <div className="section-heading"><div><h3>Master 적용 미리보기</h3><p>CREATE + SAFE UPDATE 규칙으로 Product, SKU, BOM의 적용 결과를 미리 계산합니다.</p></div>{role === 'EDITOR' && <span className="subtle-tag">미리보기만 가능</span>}</div>
     {loading && <p className="import-section-state" role="status">Master 적용 미리보기를 계산하는 중입니다…</p>}
     {error && <p className="import-error" role="alert">{error}</p>}
     {!loading && !error && preview && <>
       <div className="import-apply-grid">{([
-        ['Product', preview.productNew, preview.productUnchanged, preview.productConflict, preview.productSkipped],
-        ['SKU', preview.skuNew, preview.skuUnchanged, preview.skuConflict, preview.skuSkipped],
-        ['BOM', preview.bomNew, preview.bomUnchanged, preview.bomConflict, preview.bomSkipped],
-      ] as const).map(([label, added, unchanged, conflict, skipped]) => <div key={label}><strong>{label}</strong><span>신규 {count(added)}</span><span>동일 {count(unchanged)}</span><span className={conflict ? 'import-apply-conflict' : ''}>충돌 {count(conflict)}</span><span>제외 {count(skipped)}</span></div>)}</div>
+        ['Product', preview.productNew, preview.productUpdate, preview.productUnchanged, preview.productConflict, preview.productSkipped],
+        ['SKU', preview.skuNew, preview.skuUpdate, preview.skuUnchanged, preview.skuConflict, preview.skuSkipped],
+        ['BOM', preview.bomNew, preview.bomUpdate, preview.bomUnchanged, preview.bomConflict, preview.bomSkipped],
+      ] as const).map(([label, added, updated, unchanged, conflict, skipped]) => <div key={label}><strong>{label}</strong><span>신규 {count(added)}</span><span className={updated ? 'import-apply-update' : ''}>변경 {count(updated)}</span><span>동일 {count(unchanged)}</span><span className={conflict ? 'import-apply-conflict' : ''}>충돌 {count(conflict)}</span><span>제외 {count(skipped)}</span></div>)}</div>
       {(preview.blockingBatchIssues > 0 || conflicts > 0) && <p className="import-blocked" role="note"><strong>Master 적용이 차단되었습니다.</strong>Batch 차단 이슈 {count(preview.blockingBatchIssues)}건 · 충돌 {count(conflicts)}건을 확인해 주세요.</p>}
-      {preview.rows.length > 0 && <DataTable minWidth={720}><thead><tr><th>Kind</th><th>Business Key</th><th>판정</th><th>사유</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.candidateId}><td>{kindLabel[row.kind]}</td><td className="mono">{row.businessKey}</td><td><StatusBadge status={row.status} label={applyStatusLabel[row.status]} /></td><td>{row.reason ?? '—'}</td></tr>)}</tbody></DataTable>}
+      {actionableCount === 0 && conflicts === 0 && preview.blockingBatchIssues === 0 && <p className="import-review-notice" role="status"><strong>변경할 내용이 없습니다.</strong><span>신규 또는 변경할 수 있는 Candidate가 없습니다.</span></p>}
+      {preview.rows.length > 0 && <DataTable minWidth={820}><thead><tr><th>Kind</th><th>Business Key</th><th>판정</th><th>사유 / 변경 상세</th></tr></thead><tbody>{preview.rows.map(row => <tr key={row.candidateId}><td>{kindLabel[row.kind]}</td><td className="mono">{row.businessKey}</td><td><StatusBadge status={row.status} label={applyStatusLabel[row.status]} /></td><td>{row.changes ? <details className="import-apply-changes"><summary>변경 상세</summary><dl>{Object.entries(row.changes).map(([field, change]) => <div key={field}><dt>{applyFieldLabel[field] ?? field}</dt><dd><span>{observed(change.before)}</span><b aria-hidden="true">→</b><span>{observed(change.after)}</span></dd></div>)}</dl></details> : row.reason ?? '—'}</td></tr>)}</tbody></DataTable>}
       <div className="import-apply-actions">{role === 'ADMIN' ? <button className="button button-primary" type="button" disabled={!canApply || applying} onClick={onOpenConfirm}>Master에 적용</button> : <p className="import-readonly-note">EDITOR는 적용 결과를 미리 볼 수 있지만 Master 적용은 실행할 수 없습니다.</p>}</div>
     </>}
   </section>

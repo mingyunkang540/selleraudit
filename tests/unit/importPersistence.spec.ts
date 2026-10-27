@@ -281,15 +281,18 @@ test('malformed stored raw cells fail safely instead of crashing the shared revi
 })
 
 const applyCounts = {
-  productNew: 1, productUnchanged: 0, productConflict: 0, productSkipped: 1,
-  skuNew: 1, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
-  bomNew: 1, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
+  productNew: 1, productUpdate: 1, productUnchanged: 0, productConflict: 0, productSkipped: 1,
+  skuNew: 1, skuUpdate: 1, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
+  bomNew: 1, bomUpdate: 1, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
   blockingBatchIssues: 0,
 }
 
 test('maps apply preview rows and calls the read-only RPC with only the batch id', async () => {
   const response = { batchId, canApply: true, ...applyCounts, rows: [
     { candidateId: 'candidate-product', kind: 'PRODUCT', status: 'NEW', businessKey: '100001' },
+    { candidateId: 'candidate-update', kind: 'PRODUCT', status: 'UPDATE', businessKey: '100002', changes: {
+      productName: { before: '점보', after: '점보 냉동용기' }, category: { before: null, after: '보관용기' },
+    } },
     { candidateId: 'candidate-warning', kind: 'PRODUCT', status: 'SKIPPED_WARNING', businessKey: '100002', reason: 'VALID 후보만 적용합니다.' },
   ] }
   const fake = fakeClient({}, () => ({ data: response, error: null }))
@@ -324,6 +327,9 @@ test('rejects unknown preview row states and batch mismatches', async () => {
     { batchId: 'other-batch', canApply: true, ...applyCounts, rows: [] },
     { batchId, canApply: true, ...applyCounts, rows: [{ candidateId: 'candidate-1', kind: 'PRODUCT', status: 'UPDATED', businessKey: '100001' }] },
     { batchId, canApply: true, ...applyCounts, rows: [{ candidateId: 'candidate-1', kind: 'CHANNEL', status: 'NEW', businessKey: '100001' }] },
+    { batchId, canApply: true, ...applyCounts, rows: [{ candidateId: 'candidate-1', kind: 'PRODUCT', status: 'UPDATE', businessKey: '100001' }] },
+    { batchId, canApply: true, ...applyCounts, rows: [{ candidateId: 'candidate-1', kind: 'PRODUCT', status: 'UPDATE', businessKey: '100001', changes: { productType: { before: 'SINGLE', after: 'SET' } } }] },
+    { batchId, canApply: true, ...applyCounts, rows: [{ candidateId: 'candidate-1', kind: 'SKU', status: 'UPDATE', businessKey: 'AL00', changes: { modelName: { before: '점보', after: { secret: true } } } }] },
   ]) {
     const fake = fakeClient({}, () => ({ data, error: null }))
     await expect(createImportPersistence({ supabase: fake.supabase, workspaceId }).previewMasterImportApply(batchId))

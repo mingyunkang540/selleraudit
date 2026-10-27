@@ -1,6 +1,6 @@
 # SellerAudit Foundation + Supabase Development Integration
 
-SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준의 판매상품 Master에 연결하고 검수하는 운영 도구입니다. 기본 Mock/localStorage 모드와 Development Supabase 프로젝트의 Auth·중앙 Repository 모드를 지원합니다. Supabase 모드에서는 Master Excel 원본을 private Storage에 저장하고 서버가 실제 byte의 SHA-256을 확인한 뒤에만 새 Batch를 중앙 저장합니다. ADMIN은 normalized snapshot을 바꾸지 않고 reviewed override와 Issue 결정을 기록합니다. 저장된 Batch의 read-only Apply Preview를 확인하고 명시적으로 승인하면 Product·SKU·BOM Master에 새 행을 생성할 수 있습니다. 이 Pilot Apply는 Human Review와 별개입니다.
+SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준의 판매상품 Master에 연결하고 검수하는 운영 도구입니다. 기본 Mock/localStorage 모드와 Development Supabase 프로젝트의 Auth·중앙 Repository 모드를 지원합니다. Supabase 모드에서는 Master Excel 원본을 private Storage에 저장하고 서버가 실제 byte의 SHA-256을 확인한 뒤에만 새 Batch를 중앙 저장합니다. ADMIN은 normalized snapshot을 바꾸지 않고 reviewed override와 Issue 결정을 기록합니다. 저장된 Batch의 read-only Apply Preview를 확인하고 명시적으로 확인하면 Product·SKU·BOM Master에 새 행을 만들거나 허용된 필드만 안전하게 변경할 수 있습니다. 이 Pilot Apply는 Human Review와 별개입니다.
 
 ## 현재 구현 범위
 
@@ -14,7 +14,7 @@ SellerAudit은 여러 판매채널의 상품 정보를 사방넷 품번 기준�
 - Supabase에서 Product·SKU·BOM·Channel·Listing·Offer·Alias·Audit Issue를 읽고 기존 두 업무 RPC로 변경
 - Supabase ADMIN/EDITOR가 private 원본을 업로드하고 서버 SHA-256 검증 후 Batch·Raw·Candidate·Issue를 원자적으로 저장하고 같은 Workspace에서 공유 검토
 - ADMIN이 Candidate reviewed override와 Issue 결정을 기록하고 EDITOR는 같은 내용을 read-only로 확인
-- ACTIVE ADMIN/EDITOR의 Master 적용 미리보기와 ADMIN의 create-only Product·SKU·BOM 적용
+- ACTIVE ADMIN/EDITOR의 Master 적용 미리보기와 ADMIN의 Product·SKU·BOM 생성 및 제한된 안전 변경
 - 대시보드와 판매채널·워크스페이스 조회 화면 제공
 - Master `.xlsx` 파일을 브라우저에서 분석하고 후보·검증 이슈를 확인하며, 검증된 저장 Batch를 Preview 후 ADMIN이 Master에 적용
 - 폭 390px의 모바일 메뉴부터 1440px 데스크톱 테이블까지 반응형 지원
@@ -53,7 +53,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=<development-publishable-key>
 | 채널 상품 매트릭스 | `#/channels` | Product별 채널 등록 상태 비교와 상세 Drawer |
 | 매핑 센터 | `#/mapping` | 미매칭 Offer를 Product에 수동 연결하고 Alias 저장 |
 | 감사 센터 | `#/audit` | Issue 검색·필터와 처리 상태 변경 |
-| Master Excel 분석 | `#/import/master` | 원본 Dry-run, Candidate 저장·검토, 적용 미리보기와 ADMIN create-only Apply |
+| Master Excel 분석 | `#/import/master` | 원본 Dry-run, Candidate 저장·검토, 변경 전후 미리보기와 ADMIN Apply |
 | 판매채널 설정 | `#/settings/channels` | 현재 워크스페이스의 채널 현황 조회 |
 | 워크스페이스 설정 | `#/settings/workspace` | 현재 데이터 저장 방식과 작업 환경 조회 |
 
@@ -65,9 +65,9 @@ UI는 `SellerRepository` 인터페이스에 의존합니다. Mock 모드의 수�
 
 Supabase 모드는 Auth Session의 ACTIVE 멤버십으로 Workspace를 선택하고 중앙 PostgreSQL에서 업무 데이터를 읽습니다. 수동 매핑과 Issue 상태 변경은 `map_offer`, `update_issue_status` RPC를 호출한 뒤 데이터를 다시 읽습니다. 업무 데이터는 `localStorage`에 저장하지 않으며 사용자별 마지막 Workspace ID만 편의 설정으로 보관합니다. URL 또는 publishable key가 없으면 설정 오류를 표시하고 Mock 모드로 자동 전환하지 않습니다.
 
-Master Excel 분석은 `SellerRepository`와 분리된 Import 전용 서비스에서 처리합니다. Supabase 모드는 원본 등록→private 업로드→서버 SHA-256 확인→브라우저 Dry-run→검증된 SourceFile ID로 중앙 저장 순서로 진행합니다. Batch, Raw Row, Product/SKU/BOM Candidate, Validation Issue와 `IMPORT_VALIDATED` ActivityLog가 한 RPC로 DB에 저장됩니다. `normalized_values`는 immutable snapshot이고 ADMIN의 변경은 별도 `reviewed_values`와 `IMPORT_REVIEWED` 로그에 기록됩니다. 저장된 Batch는 `REVIEW_REQUIRED` 상태에서 Master 적용 미리보기를 제공하고, ACTIVE ADMIN이 확인해 실행하면 Product→SKU→BOM을 한 transaction에서 create-only 반영합니다. [Master Import Dry-run](docs/data/MASTER_IMPORT_DRY_RUN.md), [원본 보관·검증](docs/data/IMPORT_SOURCE_STORAGE.md), [저장 계약](docs/data/MASTER_IMPORT_PERSISTENCE.md), [Candidate Review](docs/data/IMPORT_CANDIDATE_REVIEW.md), [Pilot Apply](docs/data/PILOT_MASTER_APPLY.md)를 참고하세요.
+Master Excel 분석은 `SellerRepository`와 분리된 Import 전용 서비스에서 처리합니다. Supabase 모드는 원본 등록→private 업로드→서버 SHA-256 확인→브라우저 Dry-run→검증된 SourceFile ID로 중앙 저장 순서로 진행합니다. Batch, Raw Row, Product/SKU/BOM Candidate, Validation Issue와 `IMPORT_VALIDATED` ActivityLog가 한 RPC로 DB에 저장됩니다. `normalized_values`는 immutable snapshot이고 ADMIN의 변경은 별도 `reviewed_values`와 `IMPORT_REVIEWED` 로그에 기록됩니다. 저장된 Batch는 `REVIEW_REQUIRED` 상태에서 Master 적용 미리보기를 제공하고, ACTIVE ADMIN이 확인해 실행하면 Product→SKU→BOM을 한 transaction에서 생성하거나 허용된 필드만 변경합니다. [Master Import Dry-run](docs/data/MASTER_IMPORT_DRY_RUN.md), [원본 보관·검증](docs/data/IMPORT_SOURCE_STORAGE.md), [저장 계약](docs/data/MASTER_IMPORT_PERSISTENCE.md), [Candidate Review](docs/data/IMPORT_CANDIDATE_REVIEW.md), [6A Pilot Apply](docs/data/PILOT_MASTER_APPLY.md), [6B Safe Update](docs/data/PILOT_MASTER_UPDATE.md)를 참고하세요.
 
-SQL 스키마와 RPC 계약은 `supabase/`에 있습니다. `selleraudit-dev`에는 저장소의 11개 Migration과 5F Edge Function 2개가 적용됐습니다. 6A는 실제 ADMIN Auth·브라우저에서 업로드부터 Product/SKU/BOM Apply와 Master 화면 조회까지 통과했고, 전용 fixture cleanup도 완료했습니다. 상세 결과는 [Remote Acceptance](docs/SUPABASE_REMOTE_ACCEPTANCE.md)를 참고하세요. [DB Foundation](docs/data/IMPORT_DB_FOUNDATION.md)과 [Supabase 개발 통합](docs/SUPABASE_DEVELOPMENT_INTEGRATION.md)에도 이전 단계 계약이 있습니다.
+SQL 스키마와 RPC 계약은 `supabase/`에 있습니다. `selleraudit-dev`에는 저장소의 12개 Migration과 5F Edge Function 2개가 적용됐습니다. 6B는 실제 ADMIN Auth·브라우저에서 새 Master 생성, 후속 Workbook의 안전 변경과 Master 화면 조회를 통과했습니다. SKU/BOM을 생략한 Batch를 적용해도 기존 행이 유지됐고, 전용 fixture cleanup도 완료했습니다. 상세 결과는 [Remote Acceptance](docs/SUPABASE_REMOTE_ACCEPTANCE.md)를 참고하세요. [DB Foundation](docs/data/IMPORT_DB_FOUNDATION.md)과 [Supabase 개발 통합](docs/SUPABASE_DEVELOPMENT_INTEGRATION.md)에도 이전 단계 계약이 있습니다.
 
 ## 검증 명령
 
@@ -96,4 +96,4 @@ npm.cmd uninstall --prefix $sellerAuditQa --no-save --package-lock=false '@elect
 
 ## Stop Line
 
-Master 원본 private Storage와 서버 SHA-256 검증, 검증된 Batch 저장, ADMIN Human Review 및 create-only Product·SKU·BOM Pilot Apply까지 구현했습니다. 기존 Master UPDATE/DELETE, Approval, `READY_TO_APPLY`, validation revision 2, 직원 초대·Role 관리 UI, 회사 Production 배포는 구현하지 않았습니다. DB metadata backup은 Storage 원본 binary backup을 포함하지 않습니다.
+Master 원본 private Storage와 서버 SHA-256 검증, 검증된 Batch 저장, ADMIN Human Review 및 Product·SKU·BOM Pilot Apply까지 구현했습니다. Product명·카테고리, SKU 모델명·색상, BOM 수량만 기존 Master에서 변경할 수 있습니다. Master DELETE, business key rename, Product type 자동 변경, Approval, `READY_TO_APPLY`, validation revision 2, 직원 초대·Role 관리 UI, 회사 Production 배포는 구현하지 않았습니다. DB metadata backup은 Storage 원본 binary backup을 포함하지 않습니다.

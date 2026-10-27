@@ -41,9 +41,11 @@ try {
   const importFoundationIndex = migrations.findIndex(name => name.includes('import_foundation_and_roles'))
   const candidateReviewIndex = migrations.findIndex(name => name.includes('import_candidate_snapshot_and_review'))
   const sourceVerificationIndex = migrations.findIndex(name => name.includes('private_master_source_verification'))
+  const safeUpdateIndex = migrations.findIndex(name => name.includes('pilot_master_safe_update_v1'))
   if (importFoundationIndex < 0) throw new Error('Expected the import foundation and roles migration')
   if (candidateReviewIndex < 0) throw new Error('Expected the candidate snapshot and review migration')
   if (sourceVerificationIndex < 0) throw new Error('Expected the source verification migration')
+  if (safeUpdateIndex < 0) throw new Error('Expected the Pilot Master Safe Update migration')
 
   for (const name of migrations.slice(0, importFoundationIndex)) {
     await database.exec(await readFile(resolve(migrationDirectory, name), 'utf8'))
@@ -78,13 +80,19 @@ try {
     log(`Migration PASS: ${name}`)
   }
   await database.exec(await readFile(resolve(directory, 'import_candidate_review_contract.sql'), 'utf8'))
-  for (const name of migrations.slice(sourceVerificationIndex)) {
+  for (const name of migrations.slice(sourceVerificationIndex, safeUpdateIndex)) {
     await database.exec(await readFile(resolve(migrationDirectory, name), 'utf8'))
     log(`Migration PASS: ${name}`)
   }
   await database.exec(await readFile(resolve(directory, 'import_source_verification_contract.sql'), 'utf8'))
   await database.exec(await readFile(resolve(directory, 'pilot_master_apply_contract.sql'), 'utf8'))
   log('Pilot Master Apply contract PASS: preview, create-only apply, conflicts, roles, source trust, idempotency, rollback, and audit.')
+  for (const name of migrations.slice(safeUpdateIndex)) {
+    await database.exec(await readFile(resolve(migrationDirectory, name), 'utf8'))
+    log(`Migration PASS: ${name}`)
+  }
+  await database.exec(await readFile(resolve(directory, 'pilot_master_safe_update_contract.sql'), 'utf8'))
+  log('Pilot Master Safe Update contract PASS: safe diffs, create/update/unchanged/conflict, authorization, audit, retry denial, and rollback.')
   const tables = await database.query("select count(*)::int as count from information_schema.tables where table_schema = 'public' and table_type = 'BASE TABLE'")
   if (tables.rows[0].count !== 16) throw new Error('Expected all 16 Foundation tables')
   log('Database contract PASS: 16 tables; role backfill, RLS, atomic candidate persistence, verified source trust, tenant isolation, mapping and issue transitions.')

@@ -347,9 +347,9 @@ function savedReviewFixture(): ImportFixture {
 function applyPreview(batchId: string, overrides: Record<string, unknown> = {}) {
   return {
     batchId, canApply: true,
-    productNew: 1, productUnchanged: 0, productConflict: 0, productSkipped: 0,
-    skuNew: 1, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
-    bomNew: 1, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
+    productNew: 1, productUpdate: 0, productUnchanged: 0, productConflict: 0, productSkipped: 0,
+    skuNew: 1, skuUpdate: 0, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
+    bomNew: 1, bomUpdate: 0, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
     blockingBatchIssues: 0,
     rows: [
       { candidateId: 'candidate-product', kind: 'PRODUCT', status: 'NEW', businessKey: '100001' },
@@ -363,9 +363,9 @@ function applyPreview(batchId: string, overrides: Record<string, unknown> = {}) 
 function withApplyPreview(imports: ImportFixture, batchId = 'batch-review') {
   imports.applyPreviewsByBatch = { [batchId]: applyPreview(batchId) }
   imports.applyResultsByBatch = { [batchId]: {
-    batchId, productNew: 1, productUnchanged: 0, productConflict: 0, productSkipped: 0,
-    skuNew: 1, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
-    bomNew: 1, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
+    batchId, productNew: 1, productUpdate: 0, productUnchanged: 0, productConflict: 0, productSkipped: 0,
+    skuNew: 1, skuUpdate: 0, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
+    bomNew: 1, bomUpdate: 0, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
     blockingBatchIssues: 0, finalBatchStatus: 'APPLIED', appliedCount: 3, remainingCount: 0,
   } }
   imports.applyCalls = []
@@ -657,18 +657,85 @@ test('ADMIN can confirm Pilot Apply and open the Product master from the success
   await expect(preview).toContainText('100001')
   await preview.getByRole('button', { name: 'Master에 적용' }).click()
   const confirmation = page.getByRole('dialog', { name: 'Master에 적용' })
-  await expect(confirmation).toContainText('기존 Master 데이터는 수정하거나 삭제하지 않습니다.')
+  await expect(confirmation).toContainText('실제로 생성하거나 변경합니다.')
+  await expect(confirmation).toContainText('삭제되는 데이터는 없습니다.')
   await expect(confirmation).toContainText('신규 Product')
   await confirmation.getByRole('button', { name: '적용 확인' }).click()
 
   const result = page.getByRole('region', { name: 'Master 적용 결과' })
   await expect(result).toContainText('Master 적용 완료')
-  await expect(result).toContainText('Product 1건 · SKU 1건 · BOM 1건 생성')
+  await expect(result).toContainText('Product 신규 1 / 변경 0')
   expect(imports.applyCalls).toEqual([{ p_batch_id: 'batch-review' }])
   await result.getByRole('link', { name: '상품 마스터 보기' }).click()
   await expect(page).toHaveURL(/#\/products$/)
   await expect(page.getByRole('heading', { level: 1, name: '판매상품 마스터' })).toBeVisible()
   await expect(page.getByText('신규 적용 상품', { exact: true })).toBeVisible()
+})
+
+test('ADMIN can inspect safe update changes, confirm no deletion, and see create/update result counts', async ({ page }) => {
+  const imports = withApplyPreview(savedReviewFixture())
+  imports.applyPreviewsByBatch!['batch-review'] = applyPreview('batch-review', {
+    productNew: 0, productUpdate: 1, skuNew: 0, skuUpdate: 1, bomNew: 0, bomUpdate: 1,
+    rows: [
+      { candidateId: 'candidate-product', kind: 'PRODUCT', status: 'UPDATE', businessKey: '100526', changes: {
+        productName: { before: '점보', after: '점보 냉동용기' }, category: { before: '냉동용기', after: '보관용기' },
+      } },
+      { candidateId: 'candidate-sku', kind: 'SKU', status: 'UPDATE', businessKey: 'AL00', changes: {
+        modelName: { before: '점보', after: '점보 용기' }, color: { before: null, after: '투명' },
+      } },
+      { candidateId: 'candidate-bom', kind: 'BOM_COMPONENT', status: 'UPDATE', businessKey: '100526 / AL00', changes: {
+        quantity: { before: 1, after: 2 },
+      } },
+    ],
+  })
+  imports.applyResultsByBatch!['batch-review'] = {
+    batchId: 'batch-review', productNew: 0, productUpdate: 1, productUnchanged: 0, productConflict: 0, productSkipped: 0,
+    skuNew: 0, skuUpdate: 1, skuUnchanged: 0, skuConflict: 0, skuSkipped: 0,
+    bomNew: 0, bomUpdate: 1, bomUnchanged: 0, bomConflict: 0, bomSkipped: 0,
+    blockingBatchIssues: 0, finalBatchStatus: 'APPLIED', appliedCount: 3, remainingCount: 0,
+  }
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Apply Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+
+  const preview = page.getByRole('region', { name: 'Master 적용 미리보기' })
+  await expect(preview).toContainText('변경 1')
+  await preview.getByText('변경 상세').first().click()
+  await expect(preview).toContainText('점보 냉동용기')
+  await expect(preview).toContainText('냉동용기')
+  await preview.getByRole('button', { name: 'Master에 적용' }).click()
+  const confirmation = page.getByRole('dialog', { name: 'Master에 적용' })
+  await expect(confirmation).toContainText('변경 Product1')
+  await expect(confirmation).toContainText('변경 SKU1')
+  await expect(confirmation).toContainText('변경 BOM1')
+  await expect(confirmation).toContainText('삭제되는 데이터는 없습니다.')
+  await confirmation.getByRole('button', { name: '적용 확인' }).click()
+
+  const result = page.getByRole('region', { name: 'Master 적용 결과' })
+  await expect(result).toContainText('Product 신규 0 / 변경 1')
+  await expect(result).toContainText('SKU 신규 0 / 변경 1')
+  await expect(result).toContainText('BOM 신규 0 / 변경 1')
+})
+
+test('a no-change batch explains that there is nothing to apply', async ({ page }) => {
+  const imports = withApplyPreview(savedReviewFixture())
+  imports.applyPreviewsByBatch!['batch-review'] = applyPreview('batch-review', {
+    canApply: false, productNew: 0, productUpdate: 0, productUnchanged: 1,
+    skuNew: 0, skuUpdate: 0, skuUnchanged: 1, bomNew: 0, bomUpdate: 0, bomUnchanged: 1,
+    rows: [
+      { candidateId: 'candidate-product', kind: 'PRODUCT', status: 'UNCHANGED', businessKey: '100526' },
+      { candidateId: 'candidate-sku', kind: 'SKU', status: 'UNCHANGED', businessKey: 'AL00' },
+      { candidateId: 'candidate-bom', kind: 'BOM_COMPONENT', status: 'UNCHANGED', businessKey: '100526 / AL00' },
+    ],
+  })
+  await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Apply Workspace', role: 'ADMIN' }], imports)
+  await page.goto('/#/import/master')
+  await login(page)
+  await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
+  const preview = page.getByRole('region', { name: 'Master 적용 미리보기' })
+  await expect(preview).toContainText('변경할 내용이 없습니다.')
+  await expect(preview.getByRole('button', { name: 'Master에 적용' })).toBeDisabled()
 })
 
 test('EDITOR sees Apply Preview without an Apply button, and conflicts disable ADMIN Apply', async ({ page }) => {
@@ -684,7 +751,7 @@ test('EDITOR sees Apply Preview without an Apply button, and conflicts disable A
   const conflictImports = withApplyPreview(savedReviewFixture())
   conflictImports.applyPreviewsByBatch!['batch-review'] = applyPreview('batch-review', {
     canApply: false, productNew: 0, productConflict: 1,
-    rows: [{ candidateId: 'candidate-product', kind: 'PRODUCT', status: 'CONFLICT', businessKey: '100526', reason: '기존 상품명이 다릅니다.' }],
+    rows: [{ candidateId: 'candidate-product', kind: 'PRODUCT', status: 'CONFLICT', businessKey: '100526', reason: 'Product Type 변경은 자동 반영하지 않습니다.' }],
   })
   await page.unrouteAll({ behavior: 'wait' })
   await installFakeSupabase(page, [{ id: 'workspace-a', name: 'Apply Workspace', role: 'ADMIN' }], conflictImports)
@@ -692,6 +759,7 @@ test('EDITOR sees Apply Preview without an Apply button, and conflicts disable A
   await page.getByRole('button', { name: 'review-master.xlsx 배치 상세 보기' }).click()
   const conflictPreview = page.getByRole('region', { name: 'Master 적용 미리보기' })
   await expect(conflictPreview).toContainText('Master 적용이 차단되었습니다.')
+  await expect(conflictPreview).toContainText('Product Type 변경은 자동 반영하지 않습니다.')
   await expect(conflictPreview.getByRole('button', { name: 'Master에 적용' })).toBeDisabled()
 })
 

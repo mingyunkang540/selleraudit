@@ -176,3 +176,27 @@ OVERALL 6A = GO (Development Pilot only)
 ```
 
 6A GO는 Development에서 이 한 흐름을 실제로 수행할 수 있다는 의미다. 기존 Master UPDATE/DELETE, 정식 Approval, `READY_TO_APPLY`, validation revision 2와 Production readiness를 뜻하지 않는다.
+
+## Prompt 6B Pilot Master Safe Update 인수 (2026-10-27)
+
+Development 프로젝트 `selleraudit-dev` (`yzpkhvuftusnshdqfnim`)에 `20261027143410_pilot_master_safe_update_v1.sql`을 적용했다. 저장소와 원격의 Migration은 12개이며 Production에는 적용하지 않았다. `scripts/remote-6b-safe-update-acceptance.mjs`가 실제 ADMIN 브라우저, 네 역할의 Auth 세션, 서버 검증된 private 원본과 정확한 ID 기반 정리를 수행했다. 비밀번호·token·secret key·signed URL은 출력하거나 커밋하지 않았다.
+
+첫 Workbook을 ADMIN 브라우저에서 업로드·검증·저장·확인해 Product, SKU, BOM을 각각 한 건 생성했다. 두 번째 Workbook은 같은 business key의 Product명·카테고리, SKU 모델명·색상, BOM 수량을 변경했다. 브라우저 Preview의 `UPDATE 1` 세 건과 필드별 변경 전후 값, ADMIN 확인 창의 신규·변경 수 및 삭제 없음 안내, Apply 완료 수를 확인했다. Product/SKU/ProductComponent UUID는 생성 시와 변경 후 같았다. Product Master, SKU Master, Product 360 화면에도 변경된 값이 표시됐다.
+
+세 번째 Product-only Workbook은 기존 SKU/BOM을 생략하고 Product 카테고리만 변경했다. `Product UPDATE 1`, `SKU/BOM UPDATE 0`으로 성공 적용한 뒤 기존 SKU/BOM UUID·값·연결이 유지됨을 확인했다. 따라서 누락 항목의 자동 삭제가 없다는 검증은 거부된 Batch에 의존하지 않는다. 별도 Product type `SINGLE → SET` Batch는 `CONFLICT 1`로 Preview되고 Apply가 거부됐다. 완료 Batch의 재실행도 거부됐다.
+
+실제 EDITOR는 UPDATE Preview를 읽고 Apply가 거부됐다. VIEWER/DISABLED의 Preview·Apply는 거부됐고, ADMIN도 다른 Workspace의 Batch에 Preview·Apply할 수 없었다. `IMPORT_APPLIED` 요약의 신규/변경/동일/제외 수와 각 Master UPDATE의 `sourceBatchId`, 실제 변경 필드 `before`/`after` 로그를 확인했다. 로컬 DB contract는 실패 중 Master와 ActivityLog 원자 rollback을 검증했다.
+
+최종 fixture의 Master UUID는 Product `f2f8f678-2b93-41da-bc4f-e593ed4029c3`, SKU `c896b0cc-6be0-46ea-97a7-b8f528a10390`, ProductComponent `68450344-3ff6-4ad1-8f98-b58f72200ff2`였다. CREATE/UPDATE/OMISSION/CONFLICT Batch ID는 각각 `eb034ed6-8fae-4c65-bd8a-b8feda9a5cb7`, `05cce25b-deab-41df-b67a-d183cdaba1fe`, `6dadb5e9-45d8-4e66-9988-ced6157653f8`, `6968ed09-3b0f-4003-b517-7e0cde388c95`였다. 대응 SourceFile 네 건, exact Storage path 네 개, Raw/Candidate/Issue/ActivityLog의 정확한 ID를 스크립트가 추적해 정리했다. 사후 fixture의 모든 정확한 ID·Storage object 조회는 0건이고, Workspace의 9개 관련 테이블 count는 실행 전후 일치했다. 작업 중 한 번 중단된 별도 fixture도 저장된 exact ID만 정리하고 count 일치를 확인한 뒤 처음부터 다시 실행했다. 광범위 prefix 삭제는 사용하지 않았다.
+
+로컬에서는 PGlite 12개 Migration·6A/6B DB contract·16개 테이블, unit 64건, 기본 E2E 16건, Supabase-mode E2E 23건, typecheck, lint, build가 통과했다. Migration 전후 Security Advisor의 새 finding은 0건이며 기존 `Leaked Password Protection Disabled` WARN 1건만 남았다. Performance Advisor의 미색인 FK INFO 5건과 미사용 index INFO 7건도 전후 동일하다.
+
+```text
+LOCAL 6B = PASS
+REMOTE UPDATE CONTRACT = PASS
+REMOTE UI = PASS
+REMOTE CLEANUP = PASS
+OVERALL 6B = GO (Development Pilot only)
+```
+
+6B GO는 반복 Workbook의 제한된 CREATE·UPDATE 흐름에 대한 Development 인수다. DELETE, business key rename, Product type 자동 변경, 정식 Approval, `READY_TO_APPLY`, validation revision 2 및 Production 배포는 포함하지 않는다.

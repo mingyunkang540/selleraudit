@@ -1,5 +1,7 @@
 # Pilot Master Apply v1 (6A)
 
+이 문서는 6A의 최초 생성 계약을 기록한다. 반복 Workbook의 제한된 UPDATE는 [6B Safe Update](PILOT_MASTER_UPDATE.md)가 확장하며, 아래 create-only 설명은 6A 당시의 계약이다.
+
 SellerAudit Development의 첫 Master 반영 경로다. 서버 검증된 Master `.xlsx`의 저장된 Candidate를 읽어, 적용 미리보기를 계산한 다음 ACTIVE ADMIN의 명시적 확인으로 `products`, `skus`, `product_components`에만 새 행을 만든다. Production 배포와 기존 Master 수정·삭제는 범위 밖이다.
 
 ## 흐름과 권한

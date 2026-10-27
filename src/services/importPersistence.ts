@@ -96,9 +96,14 @@ export interface SavedRawImportRow {
 }
 
 export type MasterImportApplyKind = 'PRODUCT' | 'SKU' | 'BOM_COMPONENT'
-export type MasterImportApplyStatus = 'NEW' | 'UNCHANGED' | 'CONFLICT' |
+export type MasterImportApplyStatus = 'NEW' | 'UPDATE' | 'UNCHANGED' | 'CONFLICT' |
   'SKIPPED_WARNING' | 'SKIPPED_ERROR' | 'SKIPPED_DEFERRED' |
   'SKIPPED_INVALID' | 'SKIPPED_DEPENDENCY'
+
+export interface MasterImportApplyChange {
+  before: string | number | boolean | null
+  after: string | number | boolean | null
+}
 
 export interface MasterImportApplyRow {
   candidateId: string
@@ -106,18 +111,22 @@ export interface MasterImportApplyRow {
   status: MasterImportApplyStatus
   businessKey: string
   reason?: string
+  changes?: Record<string, MasterImportApplyChange>
 }
 
 export interface MasterImportApplyCounts {
   productNew: number
+  productUpdate: number
   productUnchanged: number
   productConflict: number
   productSkipped: number
   skuNew: number
+  skuUpdate: number
   skuUnchanged: number
   skuConflict: number
   skuSkipped: number
   bomNew: number
+  bomUpdate: number
   bomUnchanged: number
   bomConflict: number
   bomSkipped: number
@@ -209,9 +218,9 @@ function count(row: Row, key: string): number {
 }
 
 const applyCountKeys = [
-  'productNew', 'productUnchanged', 'productConflict', 'productSkipped',
-  'skuNew', 'skuUnchanged', 'skuConflict', 'skuSkipped',
-  'bomNew', 'bomUnchanged', 'bomConflict', 'bomSkipped', 'blockingBatchIssues',
+  'productNew', 'productUpdate', 'productUnchanged', 'productConflict', 'productSkipped',
+  'skuNew', 'skuUpdate', 'skuUnchanged', 'skuConflict', 'skuSkipped',
+  'bomNew', 'bomUpdate', 'bomUnchanged', 'bomConflict', 'bomSkipped', 'blockingBatchIssues',
 ] as const
 
 function mapApplyCounts(row: Row): MasterImportApplyCounts {
@@ -223,14 +232,34 @@ function mapApplyRow(value: unknown): MasterImportApplyRow {
   const kind = field(value, 'kind')
   const status = field(value, 'status')
   if (!['PRODUCT', 'SKU', 'BOM_COMPONENT'].includes(kind) || ![
-    'NEW', 'UNCHANGED', 'CONFLICT', 'SKIPPED_WARNING', 'SKIPPED_ERROR',
+    'NEW', 'UPDATE', 'UNCHANGED', 'CONFLICT', 'SKIPPED_WARNING', 'SKIPPED_ERROR',
     'SKIPPED_DEFERRED', 'SKIPPED_INVALID', 'SKIPPED_DEPENDENCY',
   ].includes(status)) throw new Error('Invalid apply row state')
   const reason = value.reason == null ? undefined : field(value, 'reason')
+  let changes: MasterImportApplyRow['changes']
+  if (value.changes != null) {
+    if (!isRow(value.changes)) throw new Error('Invalid apply row changes')
+    const allowedFields = kind === 'PRODUCT' ? ['productName', 'category'] : kind === 'SKU' ? ['modelName', 'color'] : ['quantity']
+    changes = Object.fromEntries(Object.entries(value.changes).map(([key, rawChange]) => {
+      if (!allowedFields.includes(key) || !isRow(rawChange) || !Object.hasOwn(rawChange, 'before') || !Object.hasOwn(rawChange, 'after')) {
+        throw new Error('Invalid apply row change')
+      }
+      const validValue = (candidate: unknown): candidate is string | number | boolean | null =>
+        candidate === null || ['string', 'number', 'boolean'].includes(typeof candidate)
+      if (!validValue(rawChange.before) || !validValue(rawChange.after) ||
+        (typeof rawChange.before === 'number' && !Number.isFinite(rawChange.before)) ||
+        (typeof rawChange.after === 'number' && !Number.isFinite(rawChange.after))) {
+        throw new Error('Invalid apply row change value')
+      }
+      return [key, { before: rawChange.before, after: rawChange.after }]
+    }))
+    if (status !== 'UPDATE' || Object.keys(changes).length === 0) throw new Error('Invalid apply row changes')
+  } else if (status === 'UPDATE') throw new Error('Missing apply row changes')
   return {
     candidateId: field(value, 'candidateId'), kind: kind as MasterImportApplyKind,
     status: status as MasterImportApplyStatus, businessKey: field(value, 'businessKey'),
     ...(reason ? { reason } : {}),
+    ...(changes ? { changes } : {}),
   }
 }
 
