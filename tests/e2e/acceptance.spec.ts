@@ -205,7 +205,7 @@ test('추천 상품도 전체 상품 검색으로 다시 찾을 수 있고 가�
   await expect(page.locator('.compact-candidates .candidate-card').filter({ hasText: candidate.productName })).toBeVisible()
   await page.goto('/#/channels')
   await page.getByRole('searchbox').fill(data.products[0].sabangnetCode)
-  await expect(page.getByRole('button', { name: `${data.products[0].productName}, ${detail.channel.channelName} 상세` })).toContainText('가격 미입력')
+  await expect(page.getByRole('button', { name: `${data.products[0].productName}, ${detail.channel.channelName} 상세` })).toContainText('판매가 확인 필요')
   await expect(page.getByText('∞원')).toHaveCount(0)
 })
 

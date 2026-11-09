@@ -1,4 +1,5 @@
-import { parseBom, REQUIRED_MASTER_SHEETS, type MasterWorkbookCapture } from '../../adapters/master'
+import { parseBom, REQUIRED_MASTER_SHEETS, type MasterWorkbookCapture } from '../../adapters/master/index.ts'
+import type { MasterSkuPolicy } from '../../adapters/master/workbook'
 import type {
   BomCandidate,
   ImportBlockingScope,
@@ -110,6 +111,7 @@ function productIdentity(product: ProductCandidate): string {
 function validateProducts(
   capture: MasterWorkbookCapture,
   state: ValidationState,
+  policy: MasterSkuPolicy,
 ): { products: ProductCandidate[]; bomComponents: BomCandidate[] } {
   const evidence = rawRowByLocation(capture.rawRows)
   const productCodes = new Map<number, MasterImportErrorCode[]>()
@@ -119,6 +121,20 @@ function validateProducts(
     .filter((sku) => sku.registryStatus === 'BOM_REGISTRY')
     .map((sku) => sku.skuCode))
   const bomComponents: BomCandidate[] = []
+  const unitsForSku=(code:string,visiting:Set<string>):number=>{
+    if(policy.nonCountedSkuCodes?.includes(code))return 0
+    const children=policy.skuComponents?.[code]
+    if(!children)return 1
+    if(visiting.has(code) || !children.length)throw new Error('Invalid bundle composition')
+    const next=new Set(visiting);next.add(code)
+    let total=0
+    for(const child of children){
+      if(!child || typeof child.skuCode!=='string' || !skuRegistry.has(child.skuCode) || !Number.isSafeInteger(child.quantity) || child.quantity<1)throw new Error('Invalid bundle composition')
+      total+=child.quantity*unitsForSku(child.skuCode,next)
+      if(!Number.isSafeInteger(total))throw new Error('Invalid bundle composition')
+    }
+    return total
+  }
 
   for (const product of capture.products) {
     const codes: MasterImportErrorCode[] = []
@@ -208,6 +224,7 @@ function validateProducts(
     }
 
     let parsedTotal = 0
+    let expansionValid = true
     parsed.tokens.forEach((token, tokenIndex) => {
       const componentCodes: MasterImportErrorCode[] = []
       if (!token.validQuantity) {
@@ -219,7 +236,17 @@ function validateProducts(
           message: `${token.rawToken}의 수량이 양의 정수가 아닙니다.`, expectedRule: 'BOM quantity must be a positive integer.',
         })
       } else {
-        parsedTotal += token.quantity
+        try {
+          parsedTotal += token.quantity * unitsForSku(token.skuCode,new Set())
+          if(!Number.isSafeInteger(parsedTotal))throw new Error('Invalid bundle composition')
+        } catch {
+          expansionValid=false
+          componentCodes.push('BUNDLE_COMPOSITION_INVALID')
+          productIssueCodes.push('BUNDLE_COMPOSITION_INVALID')
+          addIssue(state,{code:'BUNDLE_COMPOSITION_INVALID',sourceSheet:'단가표',sourceRow:product.sourceRow,
+            fieldPath:`rawBomText[${tokenIndex}].skuCode`,observedValue:token.skuCode,
+            message:`${token.skuCode}의 구성품을 확인할 수 없습니다.`,expectedRule:'묶음 SKU의 구성품은 등록된 SKU와 양의 정수 수량으로 정의되어야 합니다.'})
+        }
       }
       if (!skuRegistry.has(token.skuCode)) {
         componentCodes.push('UNKNOWN_SKU')
@@ -246,15 +273,15 @@ function validateProducts(
 
     if (
       parsed.unparsedText.length === 0 && parsed.tokens.length > 0 &&
-      parsed.tokens.every((token) => token.validQuantity) &&
+      parsed.tokens.every((token) => token.validQuantity) && expansionValid &&
       product.sourceQuantity != null && parsedTotal !== product.sourceQuantity
     ) {
       productIssueCodes.push('BOM_QUANTITY_MISMATCH')
       addIssue(state, {
         code: 'BOM_QUANTITY_MISMATCH', sourceSheet: '단가표', sourceRow: product.sourceRow,
         fieldPath: 'sourceQuantity', observedValue: Object.freeze([parsedTotal, product.sourceQuantity]),
-        message: `BOM 수량 합계 ${parsedTotal}개와 구성수 ${product.sourceQuantity}개가 다릅니다.`,
-        expectedRule: '파싱된 BOM 수량 합계는 단가표 구성수와 같아야 합니다.',
+        message: `실물 구성 수량 합계 ${parsedTotal}개와 구성수 ${product.sourceQuantity}개가 다릅니다.`,
+        expectedRule: '묶음 SKU의 구성품을 포함한 실물 수량 합계는 단가표 구성수와 같아야 합니다. 구성수에서 제외하기로 확인된 부자재는 계산하지 않습니다.',
       })
     }
   }
@@ -302,10 +329,10 @@ function summaryStatusCount(items: readonly { status: MasterImportStatus }[], st
   return items.filter((item) => item.status === status).length
 }
 
-export function validateMasterCapture(capture: MasterWorkbookCapture, fileName: string): MasterImportPreview {
+export function validateMasterCapture(capture: MasterWorkbookCapture, fileName: string, policy: MasterSkuPolicy = {}): MasterImportPreview {
   const state: ValidationState = { issues: [], issueSequence: 0 }
   schemaIssues(capture, state)
-  const { products, bomComponents } = validateProducts(capture, state)
+  const { products, bomComponents } = validateProducts(capture, state, policy)
   const skus = validateSkuEvidence(capture, state)
   const allCandidates = [...products, ...skus, ...bomComponents]
   const issues = Object.freeze([...state.issues])

@@ -1,0 +1,3 @@
+export type SalesDay={date:string;total:number;channels:Record<string,number|null>;sourceRow:number;groupBuy?:number|null;groupBuyPartial?:boolean;groupBuyChannels?:Record<string,number>|null}
+export type SalesWarning={type:'MONTH_SUMMARY_MISMATCH'|'DAILY_MISMATCH'|'GROUP_BUY_SOURCE_MISMATCH'|'INVALID_RAW_GROUP_BUY';sheet:string;cached?:number;calculated?:number;date?:string;row?:number;raw?:number;monthly?:number}
+export type SalesSnapshot={schemaVersion:1;parserVersion?:number;sourceName:string;sourceSha256:string;asOf:string;days:SalesDay[];months:{month:string;sourceSheet:string;summaryCached:number|null;dailyTotal:number;days:number}[];warnings:SalesWarning[];syncStatus?:string;sourcePath?:string}

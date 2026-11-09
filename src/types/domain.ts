@@ -16,7 +16,7 @@ export interface ChannelListing { id: string; workspaceId: string; channelId: st
 export interface ChannelOffer { id: string; workspaceId: string; listingId: string; channelOptionId: string; optionName: string | null; sellerCode: string | null; normalPrice: number | null; salePrice: number | null; status: EntityStatus; masterProductId: string | null; createdAt: string; updatedAt: string }
 export interface Alias { id: string; workspaceId: string; rawProductName: string; rawOptionName: string | null; sourceChannel: ChannelCode | null; masterProductId: string; createdAt: string }
 export interface AuditIssue { id: string; workspaceId: string; issueType: IssueType; severity: Severity; productId: string | null; channelId: string | null; listingId: string | null; offerId: string | null; title: string; description: string; status: IssueStatus; detectedAt: string; resolvedAt: string | null }
-export interface SellerData { workspace: Workspace; products: Product[]; skus: Sku[]; components: ProductComponent[]; channels: Channel[]; listings: ChannelListing[]; offers: ChannelOffer[]; aliases: Alias[]; issues: AuditIssue[] }
+export interface SellerData { workspace: Workspace; products: Product[]; skus: Sku[]; components: ProductComponent[]; channels: Channel[]; listings: ChannelListing[]; offers: ChannelOffer[]; aliases: Alias[]; issues: AuditIssue[]; listingIdsWithoutOffers?: string[] }
 export interface OfferDetail { offer: ChannelOffer; listing: ChannelListing; channel: Channel }
 export type CellStatus = 'NORMAL' | 'MISSING' | 'PRICE_MISMATCH' | 'REVIEW'
 export interface MappingCandidate { productId: string; confidence: number }

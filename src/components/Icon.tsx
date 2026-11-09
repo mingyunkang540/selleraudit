@@ -1,10 +1,14 @@
 import type { CSSProperties } from 'react'
-export type IconName = 'dashboard' | 'box' | 'layers' | 'grid' | 'link' | 'shield' | 'settings' | 'search' | 'arrow' | 'chevron' | 'close' | 'check' | 'alert' | 'clock' | 'external' | 'menu' | 'plus' | 'download' | 'refresh' | 'chevronLeft'
+export type IconName = 'dashboard' | 'box' | 'layers' | 'grid' | 'barChart' | 'pieChart' | 'barcode' | 'workspace' | 'link' | 'shield' | 'settings' | 'search' | 'arrow' | 'chevron' | 'close' | 'check' | 'alert' | 'clock' | 'external' | 'menu' | 'plus' | 'download' | 'refresh' | 'chevronLeft'
 const paths: Record<IconName, string> = {
   dashboard: 'M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z',
   box: 'M12 3 3 7.5v9L12 21l9-4.5v-9L12 3z M3 7.5 12 12l9-4.5 M12 12v9 M7.5 5.2l9 4.5',
   layers: 'm12 3 10 5-10 5L2 8l10-5z M2 12l10 5 10-5 M2 16l10 5 10-5',
   grid: 'M3 4h18v16H3z M3 9h18 M3 14h18 M9 4v16 M15 4v16',
+  barChart: 'M3 3v18h18 M7 17v-5 M12 17V7 M17 17v-8',
+  pieChart: 'M12 3v9h9 M20.5 15A9 9 0 1 1 9 3.5 M15 3.5a9 9 0 0 1 5.5 5.5',
+  barcode: 'M3 5v14 M6 5v14 M9 5v14 M13 5v14 M15 5v14 M18 5v14 M21 5v14',
+  workspace: 'M4 21V5l8-3 8 3v16 M2 21h20 M9 21v-5h6v5 M8 8h.01 M12 8h.01 M16 8h.01 M8 12h.01 M12 12h.01 M16 12h.01',
   link: 'm10 13 4-4 M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0 M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0',
   shield: 'M12 3 3 6v6c0 5 9 9 9 9s9-4 9-9V6l-9-3z m-4 9 3 3 5-6',
   settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8 M9 3h6l1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1 1-3z',

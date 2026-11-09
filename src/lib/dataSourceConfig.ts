@@ -1,4 +1,4 @@
-export type DataSourceMode = 'mock' | 'supabase'
+export type DataSourceMode = 'mock' | 'supabase' | 'local-server'
 
 export class ConfigurationError extends Error {
   constructor(message: string) {
@@ -20,12 +20,14 @@ function isPrivilegedKey(key: string): boolean {
 
 export function resolveDataSourceConfig(env: Record<string, string | undefined>):
   | { mode: 'mock' }
+  | { mode: 'local-server' }
   | { mode: 'supabase'; url: string; publishableKey: string } {
   if (Object.entries(env).some(([name, value]) => value && name.startsWith('VITE_') && /(SERVICE_ROLE|SECRET|DB_PASSWORD|JWT_SECRET|AUTH_ADMIN)/i.test(name))) {
     throw new ConfigurationError('비공개 키를 VITE_ 환경변수로 제공할 수 없습니다.')
   }
   const mode = env.VITE_DATA_SOURCE || 'mock'
   if (mode === 'mock') return { mode }
+  if (mode === 'local-server') return { mode }
   if (mode !== 'supabase') throw new ConfigurationError('알 수 없는 데이터 소스 설정입니다. VITE_DATA_SOURCE를 확인해 주세요.')
 
   const url = env.VITE_SUPABASE_URL?.trim()

@@ -24,7 +24,7 @@ export function SkuMaster({ data }: { data: SellerData }) {
   }) : []
 
   return <>
-    <PageHeader eyebrow="SKU MASTER" title="실물 SKU 마스터" description="물류와 재고가 움직이는 최소 단위를 확인하고 판매상품 구성을 추적합니다." />
+    <PageHeader title="SKU 관리" description="SKU와 연결된 판매상품 구성을 확인합니다." />
     <section className="panel">
       <FilterBar>
         <SearchInput value={query} onChange={(value) => { setQuery(value); setPage(1) }} placeholder="SKU 코드, 모델명, 색상으로 검색" label="SKU 검색" />
@@ -42,9 +42,9 @@ export function SkuMaster({ data }: { data: SellerData }) {
       </> : <EmptyState title={query || status !== 'ALL' ? '조건에 맞는 SKU가 없습니다.' : '등록된 SKU가 없습니다.'} description={query ? '다른 SKU 코드, 모델명 또는 색상으로 검색해 보세요.' : '필터 조건을 바꾸거나 데이터를 확인해 주세요.'} action={(query || status !== 'ALL') ? <button className="button" type="button" onClick={() => { setQuery(''); setStatus('ALL'); setPage(1) }}>전체 SKU 보기</button> : undefined} />}
     </section>
     {selectedSku && <Drawer title={`${selectedSku.skuCode} · ${selectedSku.modelName}`} subtitle={selectedSku.color ?? '색상 미지정'} onClose={() => setSelectedSku(null)}>
-      <div className="info-grid"><div className="info-item"><span>SKU 코드</span><strong className="mono">{selectedSku.skuCode}</strong></div><div className="info-item"><span>모델명</span><strong>{selectedSku.modelName}</strong></div><div className="info-item"><span>색상</span><strong>{selectedSku.color ?? '-'}</strong></div><div className="info-item"><span>상태</span><StatusBadge status={selectedSku.status} /></div></div>
+      <div className="info-grid"><div className="info-item"><span>SKU 코드</span><strong className="mono">{selectedSku.skuCode}</strong></div><div className="info-item"><span>모델명</span><strong>{selectedSku.modelName}</strong></div><div className="info-item"><span>색상</span><strong>{selectedSku.color ?? '-'}</strong></div><div className="info-item"><span>상태</span><StatusBadge status={selectedSku.status} label={selectedSku.status === 'ACTIVE' ? '사용중' : undefined} /></div></div>
       <h3 className="section-heading">포함 판매상품</h3>
-      {linkedProducts.length > 0 ? <DataTable minWidth={520}><thead><tr><th>사방넷 품번</th><th>판매상품</th><th className="align-right">구성 수량</th></tr></thead><tbody>{linkedProducts.map(({ component, product }) => <tr key={component.id}><td><a className="text-link mono" href={`#/products/${product.id}`} onClick={() => setSelectedSku(null)}>{product.sabangnetCode}</a></td><td><a className="text-link" href={`#/products/${product.id}`} onClick={() => setSelectedSku(null)}>{product.productName}</a></td><td className="align-right"><strong>{component.quantity}</strong>개</td></tr>)}</tbody></DataTable> : <EmptyState title="연결된 판매상품이 없습니다." description="이 SKU를 사용하는 BOM이 아직 등록되지 않았습니다." />}
+      {linkedProducts.length > 0 ? <DataTable minWidth={440}><thead><tr><th>사방넷 품번</th><th>판매상품</th><th className="align-right">구성 수량</th></tr></thead><tbody>{linkedProducts.map(({ component, product }) => <tr key={component.id}><td>{product.sabangnetCode ? <a className="text-link mono" href={`#/products/${product.id}`} onClick={() => setSelectedSku(null)}>{product.sabangnetCode}</a> : <span className="muted">미입력</span>}</td><td><a className="text-link" href={`#/products/${product.id}`} onClick={() => setSelectedSku(null)}>{product.productName}</a></td><td className="align-right"><strong>{component.quantity}</strong>개</td></tr>)}</tbody></DataTable> : <EmptyState title="연결된 판매상품이 없습니다." description="이 SKU를 사용하는 BOM이 아직 등록되지 않았습니다." />}
     </Drawer>}
   </>
 }

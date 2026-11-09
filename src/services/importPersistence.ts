@@ -35,6 +35,7 @@ export interface SavedImportSource {
   serverSha256: string | null
   serverByteSize: number | null
   verifiedAt: string | null
+  correction?: { originalSourceId: string; excludedRows: { sheet: string; row: number }[]; reasons: string[] }
 }
 
 export interface VerifiedImportSource {
@@ -42,6 +43,10 @@ export interface VerifiedImportSource {
   serverSha256: string
   serverByteSize: number
 }
+
+export interface WorkbookCorrection { sheet: '단가표' | '코드DB'; address: string; before: string; after: string }
+export interface NewWorkbookSku { category: string; skuCode: string; modelName: string; color: string }
+export interface IgnoredImportIssue { issueId: string; reason: string }
 
 export interface SavedImportIssue {
   id: string
@@ -146,7 +151,18 @@ export interface MasterImportApplyResult extends MasterImportApplyCounts {
   remainingCount: number
 }
 
+export interface LocalInitialPlan {
+  fingerprint:string
+  products:{row:number;code:string;name:string;components:{sku:string;quantity:number}[]}[]
+  skuCount:number
+  excluded:{row:number;name:string|null;reasons:string[]}[]
+}
+export interface LocalInitialResult { productsCreated:number;skusCreated:number;componentsCreated:number;excluded:LocalInitialPlan['excluded'];status:'APPLIED'|'PARTIALLY_APPLIED' }
+
 export interface ImportPersistence {
+  previewLocalInitial?(batchId:string):Promise<LocalInitialPlan>
+  applyLocalInitial?(batchId:string,fingerprint:string):Promise<LocalInitialResult>
+  createCorrectedSource?(sourceFileId: string, edits: readonly WorkbookCorrection[], newSkus: readonly NewWorkbookSku[], batchId: string, ignoredIssues: readonly IgnoredImportIssue[]): Promise<VerifiedImportSource>
   prepareSourceFile(file: File, hash: string, onStage?: (stage: 'UPLOADING' | 'VERIFYING') => void): Promise<VerifiedImportSource>
   saveMasterDryRun(preview: MasterImportPreview, sourceFileId: string, hash: string): Promise<string>
   loadSourceFile(sourceFileId: string): Promise<SavedImportSource>
@@ -255,22 +271,24 @@ function mapApplyRow(value: unknown): MasterImportApplyRow {
     }))
     if (status !== 'UPDATE' || Object.keys(changes).length === 0) throw new Error('Invalid apply row changes')
   } else if (status === 'UPDATE') throw new Error('Missing apply row changes')
+  const businessKey = value.businessKey
+  if (typeof businessKey !== 'string' || (!businessKey.trim() && !status.startsWith('SKIPPED_'))) throw new Error('Invalid businessKey')
   return {
     candidateId: field(value, 'candidateId'), kind: kind as MasterImportApplyKind,
-    status: status as MasterImportApplyStatus, businessKey: field(value, 'businessKey'),
+    status: status as MasterImportApplyStatus, businessKey,
     ...(reason ? { reason } : {}),
     ...(changes ? { changes } : {}),
   }
 }
 
-function mapApplyPreview(data: unknown, batchId: string): MasterImportApplyPreview {
+export function mapApplyPreview(data: unknown, batchId: string): MasterImportApplyPreview {
   if (!isRow(data) || field(data, 'batchId') !== batchId || typeof data.canApply !== 'boolean' || !Array.isArray(data.rows)) {
     throw new Error('Invalid apply preview')
   }
   return { batchId, canApply: data.canApply, ...mapApplyCounts(data), rows: data.rows.map(mapApplyRow) }
 }
 
-function mapApplyResult(data: unknown, batchId: string): MasterImportApplyResult {
+export function mapApplyResult(data: unknown, batchId: string): MasterImportApplyResult {
   if (!isRow(data) || field(data, 'batchId') !== batchId) throw new Error('Invalid apply result')
   const finalBatchStatus = field(data, 'finalBatchStatus')
   if (!['APPLIED', 'PARTIALLY_APPLIED'].includes(finalBatchStatus)) throw new Error('Invalid final batch status')
@@ -300,7 +318,7 @@ function asRows(data: unknown): Row[] {
   return data
 }
 
-function mapBatch(row: Row, workspaceId: string): SavedImportBatch {
+export function mapBatch(row: Row, workspaceId: string): SavedImportBatch {
   validateWorkspace(row, workspaceId)
   if (field(row, 'source_type') !== 'MASTER_WORKBOOK') throw new Error('Wrong import source')
   const createdAt = field(row, 'created_at')
@@ -320,7 +338,7 @@ function mapBatch(row: Row, workspaceId: string): SavedImportBatch {
   }
 }
 
-function mapIssue(row: Row, workspaceId: string, batchId: string): SavedImportIssue {
+export function mapIssue(row: Row, workspaceId: string, batchId: string): SavedImportIssue {
   validateWorkspace(row, workspaceId)
   if (field(row, 'import_batch_id') !== batchId) throw new Error('Wrong import batch')
   const relatedRawRowIds = stringArray(row, 'related_raw_row_ids')
@@ -337,7 +355,7 @@ function mapIssue(row: Row, workspaceId: string, batchId: string): SavedImportIs
   }
 }
 
-function mapCandidate(row: Row, workspaceId: string, batchId: string): SavedImportCandidate {
+export function mapCandidate(row: Row, workspaceId: string, batchId: string): SavedImportCandidate {
   validateWorkspace(row, workspaceId)
   if (field(row, 'import_batch_id') !== batchId) throw new Error('Wrong import batch')
   const kind = field(row, 'kind')
@@ -363,7 +381,7 @@ function mapCandidate(row: Row, workspaceId: string, batchId: string): SavedImpo
   }
 }
 
-function mapRawRow(row: Row, workspaceId: string): SavedRawImportRow {
+export function mapRawRow(row: Row, workspaceId: string): SavedRawImportRow {
   validateWorkspace(row, workspaceId)
   if (!Array.isArray(row.raw_cells)) throw new Error('Invalid raw cells')
   const originalRowNumber = count(row, 'original_row_number')

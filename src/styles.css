@@ -19,3 +19,51 @@ button{color:inherit}.page-content{padding-top:25px}.page-heading{margin-bottom:
 @media(max-width:1100px){.mapping-layout{grid-template-columns:1fr}.mapping-queue{min-height:0}.queue-list{max-height:280px}.candidate-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.mapping-detail{min-height:0}}
 @media(max-width:700px){.mapping-queue,.mapping-detail{padding:16px}.candidate-grid{grid-template-columns:1fr}.bar-chart-row>.channel-badge{width:100px}.mapping-actions{flex-wrap:wrap}.source-card{padding:13px}.issue-detail-grid,.offer-card .detail-grid{grid-template-columns:1fr}.source-card .mono{overflow-wrap:anywhere}.queue-item{grid-template-columns:auto minmax(0,1fr) auto}.health-ring{width:158px;height:158px}.health-stat{margin-top:15px}}
 .channel-matrix-page .data-table th,.channel-matrix-page .data-table td{padding:12px}.channel-matrix-page .data-table th:first-child,.channel-matrix-page .data-table td:first-child{width:220px;min-width:220px;position:sticky;left:0;z-index:1;background:white}.channel-matrix-page .data-table th:first-child{background:#f8f9fc}.channel-matrix-page .data-table th:nth-child(2),.channel-matrix-page .data-table td:nth-child(2){width:70px;min-width:70px;white-space:nowrap}.channel-matrix-page .matrix-cell{min-width:105px;padding:9px}.channel-matrix-page .product-cell{gap:9px}.channel-matrix-page .product-cell .text-link{word-break:keep-all;line-height:1.7}.channel-matrix-page .matrix-cell small{font-size:9px}.channel-matrix-page .data-table .channel-badge{font-size:10px;gap:5px}.channel-matrix-page .data-table .channel-logo{height:17px;width:17px;font-size:10px}
+
+/* Shared operations UI: readable controls and consistent data density. */
+.page-content{line-height:1.55}
+.page-heading h1{font-size:26px;letter-spacing:-.02em}
+.page-description,.section-heading p{font-size:13px;color:#63728a}
+.button,.search-input input,.select-field select,.pagination,.data-table td,.data-table th{font-size:13px}
+.button{min-height:40px;padding:9px 14px}
+.button-small{min-height:34px;padding:6px 11px;font-size:12px}
+.data-table th{font-weight:600;color:#596b84}
+.data-table td{line-height:1.55}
+.kpi-top,.kpi-bottom,.chart-legend,.chart-value,.action-card>div>span{font-size:12px}
+.kpi-card{padding:18px 20px}
+.kpi-value{font-variant-numeric:tabular-nums}
+.bar-chart{padding-bottom:22px}
+.bar-chart-row>.channel-badge{font-size:12px;width:145px}
+.health-explanation,.health-caption,.health-stat{font-size:12px;line-height:1.6}
+.nav-item{font-size:13px}
+.queue-item,.queue-item strong,.source-card strong,.candidate-card strong{font-size:13px}
+.queue-item small,.source-card span,.candidate-card small,.mapping-actions{font-size:12px}
+.channel-matrix-page .matrix-cell small{font-size:11px}
+.channel-matrix-page .data-table .channel-badge{font-size:12px}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #365fd8;outline-offset:2px}
+@media(max-width:480px){
+  .page-heading{flex-wrap:wrap}
+  .heading-actions{display:flex;flex-wrap:wrap;width:100%}
+  .heading-actions .button{font-size:12px}
+  .page-heading h1{font-size:23px}
+  .page-description{font-size:12px}
+  .kpi-top,.kpi-bottom{font-size:11px}
+  .bar-chart-row>.channel-badge{font-size:11px}
+  .filter-bar .select-field{flex:1 1 135px;min-width:0}
+  .filter-bar .select-field select{min-width:0}
+}
+
+.table-scroll-hint{margin:0;padding:7px 18px;background:#f8faff;color:#586b89;font-size:12px;text-align:right}
+.table-scroll:focus-visible{outline:2px solid #365fd8;outline-offset:-2px}
+
+@media(max-width:600px){
+  /* Keep the channel table usable when a fixed product column would cover the screen. */
+  .channel-matrix-page .data-table th:first-child,.channel-matrix-page .data-table td:first-child{position:static}
+  .channel-matrix-page .matrix-event-select{white-space:nowrap}
+}
+
+@media(max-width:800px){
+  .sidebar:not(.is-open){visibility:hidden}
+}
+
+.chart-loading{padding:10px 22px 24px;color:#63728a;font-size:13px;line-height:1.6}

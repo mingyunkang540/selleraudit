@@ -1,0 +1,57 @@
+import {expect,test} from '@playwright/test'
+import {createSeedData} from '../../src/mock'
+import * as XLSX from 'xlsx'
+import {readFile} from 'node:fs/promises'
+
+test('상품 구분과 채널별 판매량 및 색상 비중을 확인한다',async({page})=>{
+ const data=createSeedData()
+ await page.route('**/api/**',async route=>{const path=new URL(route.request().url()).pathname
+  if(path==='/api/auth/session')return route.fulfill({json:{openMode:true,user:{userId:'u',workspaceId:data.workspace.id,role:'ADMIN',email:'admin@example.com',displayName:'Admin'},csrf:'fake',importEnabled:true}})
+  if(path==='/api/data')return route.fulfill({json:data})
+  if(path==='/api/product-sales-analysis')return route.fulfill({json:{sourceName:'매출.xlsx',syncStatus:'current',skipped:{},rows:[{date:'2024-01-01',channel:'자사몰',category:'구분 미입력',product:'과거 상품',color:'핑크',quantity:2,amount:20000,sourceRows:1},{date:'2026-01-01',channel:'자사몰',category:'단품',product:'5호',color:'라벤더',quantity:3,amount:30000,sourceRows:2},{date:'2026-01-01',channel:'자사몰',category:'단품',product:'5호',color:'-',quantity:2,amount:20000,sourceRows:1},{date:'2026-01-01',channel:'자사몰',category:'단품',product:'5호',color:'0',quantity:4,amount:40000,sourceRows:1},{date:'2026-01-01',channel:'자사몰',category:'단품',product:'5호',color:'색상 미확인',quantity:1,amount:10000,sourceRows:1},{date:'2026-01-02',channel:'자사몰',category:'단품',product:'5호',color:'핑크',quantity:1,amount:10000,sourceRows:1},{date:'2026-01-02',channel:'오늘의집',category:'세트구성',product:'세트 A',color:'라벤더',quantity:6,amount:60000,sourceRows:1},{date:'2026-01-02',channel:'자사몰',category:'매칭필요',product:'미확인 상품',color:'매칭필요',quantity:99,sourceRows:1}]}})
+  if(path==='/api/product-configurations')return route.fulfill({json:{configurations:[],bindings:[]}})
+  return route.fulfill({json:{employees:[]}})
+ })
+ await page.goto('/#/product-sales')
+ await expect(page.getByRole('heading',{name:'상품 판매 분석'})).toBeVisible()
+ await expect(page.locator('.product-sales-kpis').first()).toContainText('19개')
+ await expect(page.getByRole('button',{name:/구분 미입력/})).toBeVisible()
+ await expect(page.getByRole('row',{name:/과거 상품 2개/})).toBeVisible()
+ await page.getByLabel('시작일').fill('2026-01-01')
+ await expect(page.locator('.product-sales-kpis').first()).toContainText('17개')
+ await expect(page.getByRole('option',{name:'매칭필요'})).toHaveCount(0)
+ await expect(page.getByRole('row',{name:/미확인 상품/})).toHaveCount(0)
+ await expect(page.getByRole('row',{name:/라벤더 9개 90.0%/})).toBeVisible()
+ await expect(page.getByRole('row',{name:'색상 없음/미확인'})).toHaveCount(0)
+ await expect(page.getByRole('row',{name:'색상 미확인'})).toHaveCount(0)
+ await expect(page.getByRole('row',{name:/5호 11개/})).toBeVisible()
+ await page.getByRole('button',{name:'5호',exact:true}).click()
+ await expect(page.locator('.product-sales-table').last()).toContainText('5호 기준')
+ await expect(page.getByRole('row',{name:/라벤더 3개 75.0%/})).toBeVisible()
+ await page.getByLabel('상품 검색').fill('5호')
+ const downloadPromise=page.waitForEvent('download')
+ await page.getByRole('button',{name:'엑셀 다운로드'}).click()
+ const download=await downloadPromise
+ expect(download.suggestedFilename()).toBe('상품판매분석_2026-01-01_2026-01-02.xlsx')
+ const workbook=XLSX.read(await readFile((await download.path())!),{cellNF:true})
+ expect(workbook.SheetNames).toEqual(['조회 조건','상품 구분별','상품별 판매량','색상별 판매량'])
+ const conditions=XLSX.utils.sheet_to_json<(string|number)[]>(workbook.Sheets['조회 조건'],{header:1})
+ expect(conditions).toContainEqual(['상품 검색어','5호'])
+ expect(conditions).toContainEqual(['색상 집계 선택 상품','5호'])
+ expect(conditions).toContainEqual(['선택 조건 판매량',17])
+ const product=workbook.Sheets['상품별 판매량']
+ expect(product.A2.v).toBe('5호');expect(product.B2.v).toBe(11);expect(product.C2.v).toBeCloseTo(11/17);expect(product.C2.z).toBe('0.0%')
+ const color=workbook.Sheets['색상별 판매량']
+ expect(color.A2.v).toBe('라벤더');expect(color.B2.v).toBe(3);expect(color.C2.v).toBe(.75)
+ expect(product.D2.v).toBe(110000);expect(color.D2.v).toBe(30000)
+ expect(XLSX.utils.sheet_to_json<(string|number)[]>(color,{header:1})).toHaveLength(3)
+ await page.getByLabel('상품 검색').fill('')
+ await page.getByRole('button',{name:'상품 선택 해제'}).click()
+ await page.getByLabel('상품 구분').selectOption('단품')
+ await expect(page.locator('.product-sales-kpis').first()).toContainText('11개')
+ await expect(page.getByRole('row',{name:/라벤더 3개 75.0%/})).toBeVisible()
+ await expect(page.getByRole('row',{name:/핑크 1개 25.0%/})).toBeVisible()
+ await page.getByLabel('시작일').fill('2026-01-02')
+ await expect(page.locator('.product-sales-kpis').first()).toContainText('1개')
+ await expect(page.getByRole('row',{name:/핑크 1개 100.0%/})).toBeVisible()
+})

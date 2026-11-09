@@ -301,6 +301,15 @@ test('maps apply preview rows and calls the read-only RPC with only the batch id
   expect(fake.calls).toEqual([{ name: 'preview_master_import_apply', args: { p_batch_id: batchId } }])
 })
 
+test('preview accepts a missing key only for an excluded candidate', async () => {
+  const row = { candidateId: 'missing-key', kind: 'PRODUCT', status: 'SKIPPED_ERROR', businessKey: '', reason: 'Candidate status is ERROR.' }
+  const response = { batchId, canApply: false, ...applyCounts, rows: [row] }
+  const fake = fakeClient({}, () => ({ data: response, error: null }))
+  await expect(createImportPersistence({ supabase: fake.supabase, workspaceId }).previewMasterImportApply(batchId)).resolves.toEqual(response)
+  const invalid = fakeClient({}, () => ({ data: { ...response, rows: [{ ...row, status: 'NEW' }] }, error: null }))
+  await expect(createImportPersistence({ supabase: invalid.supabase, workspaceId }).previewMasterImportApply(batchId)).rejects.toThrow()
+})
+
 test('maps apply result counts and never exposes malformed or database error details', async () => {
   const response = { batchId, ...applyCounts, finalBatchStatus: 'PARTIALLY_APPLIED', appliedCount: 3, remainingCount: 1 }
   const fake = fakeClient({}, () => ({ data: response, error: null }))

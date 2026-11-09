@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { DataTable, Drawer, EmptyState, PageHeader, SearchInput, StatusBadge } from '../../components/ui'
 import { ImportPersistenceError, type ImportPersistence } from '../../services/importPersistence'
+import { LOCAL_APPROVED_BUNDLE_SKUS, LOCAL_APPROVED_SKU_CATEGORIES, LOCAL_SKU_COMPONENTS, LOCAL_NON_COUNTED_SKUS } from '../../services/import/localPolicy'
 import type { MasterImportPreview } from '../../types/import'
 import { SavedImportReview } from './SavedImportReview'
 import './master-import.css'
@@ -21,12 +22,12 @@ function Status({ value }: { value: string }) {
 
 function Summary({ preview }: { preview: MasterImportPreview }) {
   const { summary } = preview
-  return <section className="panel import-summary" aria-label="Dry-run 요약">
-    <div className="section-heading"><div><h2>Master 분석 결과</h2><p>원본에서 추출한 후보와 검증 결과입니다. 실제 데이터는 변경되지 않았습니다.</p></div><span className="subtle-tag">DRY-RUN ONLY</span></div>
+  return <section className="panel import-summary" aria-label="분석 결과 요약">
+    <div className="section-heading"><div><h2>Master 분석 결과</h2><p>원본에서 추출한 후보와 검증 결과입니다. 실제 데이터는 변경되지 않았습니다.</p></div></div>
     <div className="import-summary-grid">
       {[
-        ['원본 행', summary.rowCount], ['Product 후보', summary.productCount], ['SKU 후보', summary.skuCount],
-        ['BOM 구성 후보', summary.bomCount], ['정상 후보', summary.validCount], ['주의 후보', summary.warningCount],
+        ['원본 행', summary.rowCount], ['상품 후보', summary.productCount], ['SKU 후보', summary.skuCount],
+        ['구성품 후보', summary.bomCount], ['정상 후보', summary.validCount], ['주의 후보', summary.warningCount],
         ['오류 후보', summary.errorCount], ['보류 후보', summary.deferredCount],
       ].map(([label, value]) => <div className="import-metric" key={label}><span>{label}</span><strong>{count(Number(value))}</strong></div>)}
     </div>
@@ -47,7 +48,7 @@ function RelatedCandidates({ preview, issue }: { preview: MasterImportPreview; i
   return <><h3 className="import-detail-heading">관련 Product / SKU / BOM 후보</h3>{candidates.length ? <ul className="import-related-candidates">{candidates.map(item => <li key={item.id}><span>{item.label}</span><Status value={item.status} /></li>)}</ul> : <p className="muted">연결된 후보가 없습니다.</p>}</>
 }
 
-export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: ImportPersistence; role?: 'ADMIN' | 'EDITOR' }) {
+export function MasterImport({ persistence, role = 'ADMIN', localPolicy = false, onMasterApplied }: { persistence?: ImportPersistence; role?: 'ADMIN' | 'EDITOR'; localPolicy?: boolean; onMasterApplied?:()=>void }) {
   const requestId = useRef(0)
   const savingPreviewId = useRef<number | null>(null)
   const [file, setFile] = useState<File | null>(null)
@@ -103,7 +104,7 @@ export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: Im
       setState('VALIDATING')
       await new Promise<void>(resolve => setTimeout(resolve, 0))
       const { analyzeMasterWorkbook } = await import('../../services/import')
-      const result = await analyzeMasterWorkbook(bytes, file.name)
+      const result = await analyzeMasterWorkbook(bytes, file.name, localPolicy ? { approvedBundleSkuCodes: LOCAL_APPROVED_BUNDLE_SKUS, approvedSkuCategories: LOCAL_APPROVED_SKU_CATEGORIES, skuComponents: LOCAL_SKU_COMPONENTS, nonCountedSkuCodes: LOCAL_NON_COUNTED_SKUS } : {})
       if (currentRequest !== requestId.current) return
       setPreview(result)
       setState('READY')
@@ -151,22 +152,22 @@ export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: Im
   const rawRow = selectedIssue?.sourceRow !== null && selectedIssue && preview?.rawRows.find(row => row.sourceSheet === selectedIssue.sourceSheet && row.originalRowNumber === selectedIssue.sourceRow)
 
   return <div className="feature-page master-import-page">
-    <PageHeader eyebrow="MASTER IMPORT · DRY-RUN" title="Master Excel 분석" description="상품·SKU·BOM 후보를 원본 파일에서 읽어 검증합니다. 분석 결과는 이 화면에만 남으며 Master에는 반영되지 않습니다." />
+    <PageHeader title="Master Excel 분석" description="상품과 구성 정보를 분석하고, 결과를 확인한 뒤 적용할 수 있습니다." />
     <section className="panel import-upload" aria-label="Master Excel 선택">
-      <div><h2>Master Excel 파일을 선택하세요</h2><p>땡스소윤 상품 단가표 형식의 .xlsx 파일을 지원합니다. {persistence ? 'Private Storage에 원본을 저장하고 서버 SHA-256을 확인한 뒤 분석합니다.' : '파일은 브라우저에서만 분석합니다.'}</p></div>
+      <div><h2>Master Excel 파일을 선택하세요</h2><p>땡스소윤 상품 단가표 형식의 .xlsx 파일을 지원합니다. 분석만으로는 상품이 변경되지 않습니다.</p></div>
       <div className="import-upload-actions"><label className="button import-picker">파일 선택<input aria-label="Master Excel 파일" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => chooseFile(event.target.files?.[0] ?? null)} /></label><button className="button button-primary" type="button" onClick={() => void analyze()} disabled={!file || ['READING', 'REGISTERING', 'UPLOADING', 'VERIFYING', 'VALIDATING'].includes(state) || (state === 'ERROR' && !/\.xlsx$/i.test(file?.name ?? ''))}>분석 시작</button></div>
       {file && <dl className="import-file-meta"><div><dt>파일명</dt><dd>{file.name}</dd></div><div><dt>크기</dt><dd>{(file.size / 1024).toLocaleString('ko-KR', { maximumFractionDigits: 1 })} KB</dd></div>{hash && <div><dt>SHA-256</dt><dd className="mono">{hash}</dd></div>}</dl>}
-      {['READING', 'REGISTERING', 'UPLOADING', 'VERIFYING', 'VALIDATING'].includes(state) && <p role="status" className="import-progress">{state === 'READING' ? '파일을 읽는 중입니다…' : state === 'REGISTERING' ? '원본 등록 중입니다…' : state === 'UPLOADING' ? 'Private 원본 업로드 중입니다…' : state === 'VERIFYING' ? '서버 무결성 확인 중입니다…' : 'Dry-run 분석 중입니다…'}</p>}
-      {sourceFileId && <p className="import-progress">서버 검증 완료 · 원본 ID <span className="mono">{sourceFileId}</span></p>}
+      {['READING', 'REGISTERING', 'UPLOADING', 'VERIFYING', 'VALIDATING'].includes(state) && <p role="status" className="import-progress">{state === 'READING' ? '파일을 읽는 중입니다…' : state === 'REGISTERING' ? '원본 등록 중입니다…' : state === 'UPLOADING' ? '원본 파일을 업로드하는 중입니다…' : state === 'VERIFYING' ? '서버에서 원본을 확인하는 중입니다…' : '파일을 분석하는 중입니다…'}</p>}
+      {sourceFileId && <p className="import-progress">원본 파일 확인 완료</p>}
       {message && <p role="alert" className="import-error">{message}</p>}
     </section>
 
     {preview && <>
       <Summary preview={preview} />
       <section className="panel import-persistence" aria-label="검증 결과 중앙 저장">
-        <div><h2>검증 결과 공유 저장</h2><p>원본 행과 검증 이슈, 요약만 중앙 저장소에 기록합니다. 저장 성공은 Master Apply 가능 상태를 의미하지 않습니다.</p></div>
-        {persistence ? <div className="import-persistence-actions"><button className="button button-primary" type="button" onClick={() => void savePreview()} disabled={!hash || !sourceFileId || saveState === 'SAVING' || saveState === 'SAVED'}>{saveState === 'SAVING' ? '저장 중…' : saveState === 'SAVED' ? '저장 완료' : '검증 결과 저장'}</button>{!sourceFileId && <span className="muted">서버가 원본 SHA-256을 확인해야 공유 저장할 수 있습니다.</span>}</div> : <p className="muted">Supabase 모드에서만 공유 저장할 수 있습니다.</p>}
-        {saveState === 'SAVED' && savedBatchId && <div className="import-save-success" role="status"><strong>검증 결과가 중앙 저장소에 저장되었습니다.</strong><span className="mono">Batch ID: {savedBatchId}</span><span>상태: REVIEW_REQUIRED</span><small>이 기록은 공유 검토용이며 Master Apply가 아닙니다.</small></div>}
+        <div><h2>검증 결과 공유 저장</h2><p>분석 결과를 저장합니다. 저장 후에도 상품에 적용하기 전에 검토가 필요합니다.</p></div>
+        {persistence ? <div className="import-persistence-actions"><button className="button button-primary" type="button" onClick={() => void savePreview()} disabled={!hash || !sourceFileId || saveState === 'SAVING' || saveState === 'SAVED'}>{saveState === 'SAVING' ? '저장 중…' : saveState === 'SAVED' ? '저장 완료' : '검증 결과 저장'}</button>{!sourceFileId && <span className="muted">원본 파일 확인 후 결과를 저장할 수 있습니다.</span>}</div> : <p className="muted">Supabase 모드에서만 공유 저장할 수 있습니다.</p>}
+        {saveState === 'SAVED' && savedBatchId && <div className="import-save-success" role="status"><strong>검증 결과가 중앙 저장소에 저장되었습니다.</strong><span className="mono">Batch ID: {savedBatchId}</span><span>상태: 검토 필요</span><small>분석 결과를 저장했으며 상품에는 아직 적용하지 않았습니다.</small></div>}
         {saveState === 'ERROR' && <div className="import-error" role="alert"><strong>검증 결과를 저장하지 못했습니다.</strong><span>기존 Master 데이터는 변경되지 않았습니다.</span><button className="button button-small" type="button" onClick={() => setSaveState('IDLE')}>다시 시도</button></div>}
       </section>
       {preview.blocked && <div className="import-blocked" role="status"><strong>차단 오류 {count(preview.summary.blockingCount)}건을 확인하세요.</strong><span>현재 파일은 Master 적용 기준을 충족하지 않습니다. 이 화면에는 Apply 기능이 없습니다.</span></div>}
@@ -180,7 +181,7 @@ export function MasterImport({ persistence, role = 'ADMIN' }: { persistence?: Im
       </section>
     </>}
 
-    {persistence && <SavedImportReview persistence={persistence} refreshKey={historyRefresh} role={role} />}
+    {persistence && <SavedImportReview persistence={persistence} refreshKey={historyRefresh} role={role} localPolicy={localPolicy} onMasterApplied={onMasterApplied} />}
 
     {selectedIssue && preview && <Drawer title={selectedIssue.code} subtitle={source(selectedIssue.sourceSheet, selectedIssue.sourceRow)} onClose={() => setSelectedIssue(null)}><dl className="import-issue-detail"><dt>차단 범위</dt><dd>{selectedIssue.blockingScope}</dd><dt>원본 값</dt><dd>{String(selectedIssue.observedValue ?? '—')}</dd><dt>기대 규칙</dt><dd>{selectedIssue.expectedRule}</dd><dt>설명</dt><dd>{selectedIssue.message}</dd><dt>관련 행</dt><dd>{selectedIssue.relatedRows.length ? selectedIssue.relatedRows.map(row => `${row}행`).join(', ') : '—'}</dd></dl><RelatedCandidates preview={preview} issue={selectedIssue} /><h3 className="import-detail-heading">원본 행</h3>{rawRow ? <dl className="import-raw-cells">{rawRow.rawCells.map(cell => <div key={cell.address}><dt>{cell.address} · {cell.originalType}</dt><dd>{String(cell.originalValue ?? cell.cachedValue ?? '빈 값')}{cell.formulaText && <small>수식: {cell.formulaText}</small>}{cell.errorCode && <small>오류: {cell.errorCode}</small>}</dd></div>)}</dl> : <p className="muted">이 이슈는 파일 구조 전체에 관한 것입니다.</p>}</Drawer>}
   </div>

@@ -1,14 +1,15 @@
 import { useId, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { FormEvent, ReactNode } from 'react'
 import './auth.css'
 
 export interface LoginProps {
   onLogin: (email: string, password: string) => Promise<void>
   loading?: boolean
   error?: string | null
+  footer?: ReactNode
 }
 
-export function Login({ onLogin, loading = false, error = null }: LoginProps) {
+export function Login({ onLogin, loading = false, error = null, footer }: LoginProps) {
   const emailId = useId()
   const passwordId = useId()
   const errorId = useId()
@@ -45,7 +46,6 @@ export function Login({ onLogin, loading = false, error = null }: LoginProps) {
         </div>
 
         <div className="login-heading">
-          <p className="login-eyebrow">INTERNAL PILOT</p>
           <h1 id="login-title">SellerAudit 로그인</h1>
           <p>승인된 사내 계정으로 로그인해 주세요.</p>
         </div>
@@ -93,6 +93,7 @@ export function Login({ onLogin, loading = false, error = null }: LoginProps) {
         </form>
 
         <p className="login-support">계정 또는 접근 권한은 SellerAudit 관리자에게 문의해 주세요.</p>
+        {footer}
       </section>
     </main>
   )

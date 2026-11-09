@@ -3,16 +3,16 @@
 ## Source of truth
 
 - Status: Active
-- Last refreshed: 2026-10-10
-- Surface: SellerAudit V0.1 Foundation, Korean desktop operations SaaS
+- Last refreshed: 2026-11-05
+- Surface: SellerAudit local-first, Korean desktop operations application
 - Evidence: current `src/`, tests, product specification and reference boards
 - Domain contract: [docs/DOMAIN.md](docs/DOMAIN.md)
 
 ## Product goal
 
-사용자는 Product를 사방넷 품번으로 찾고, 실제 물류 SKU와 BOM을 확인하고, 여러 채널의 Listing·Offer 상태를 비교한 뒤 미매칭과 Audit Issue를 수동 처리할 수 있어야 합니다. 현재 성공 기준은 이 흐름이 Mock 데이터와 `localStorage`에서 일관되게 작동하는 것입니다.
+사용자는 Product를 사방넷 품번으로 찾고, 실제 물류 SKU와 BOM을 확인하고, 여러 채널의 Listing·Offer 상태를 비교한 뒤 미매칭과 Audit Issue를 수동 처리할 수 있어야 합니다. 현재 운영 환경에서는 이 흐름을 로컬 서버와 PostgreSQL의 실제 데이터로 사용하며, Mock 모드는 별도의 데모·테스트용입니다.
 
-실제 SCM 파싱, 자동매칭, Audit 탐지, API 동기화, 주문·재고·정산은 V0.1 범위가 아닙니다.
+상품 마스터 분석과 채널별 파일 가져오기는 실제 원본을 기준으로 하며, 채널 정보는 자동 실시간 연동 여부를 명확히 표시합니다.
 
 ## Information architecture
 
@@ -27,13 +27,13 @@
 - 시스템 한글 글꼴, 본문 13–14px, 제목 26px, 숫자는 tabular numerals
 - 4px 간격 단위, 10–12px 패널 radius, 얇은 경계와 최소 그림자
 - 테이블을 장식보다 우선하고 넓은 표는 패널 안에서 가로 스크롤합니다.
-- 상품 썸네일은 로컬 장식 SVG이며 실제 상품 사진으로 표현하지 않습니다.
+- 등록된 상품 이미지를 우선 표시하고, 이미지가 없는 상품은 기본 아이콘을 사용합니다.
 
 ## Shared components and states
 
 `PageHeader`, `SearchInput`, `FilterBar`, `DataTable`, `StatusBadge`, `IssueBadge`, `ChannelBadge`, `EmptyState`, `KpiCard`, `Drawer`, `ConfirmDialog`를 공통 사용합니다. Loading, 저장소 오류와 재시도, 빈 데이터, 검색 결과 없음, 미매핑, 미등록 상태를 명시합니다.
 
-수동 매핑 확인창은 원본 Offer와 대상 Product를 함께 보여줍니다. 저장은 저장소의 단일 동작으로 수행하고 오류를 화면에 남깁니다. 백그라운드 네트워크 호출은 없습니다.
+수동 매핑 확인창은 원본 Offer와 대상 Product를 함께 보여줍니다. 저장은 저장소의 단일 동작으로 수행하고 오류를 화면에 남깁니다. 로컬 서버 조회와 저장 결과는 로딩·오류 상태를 통해 구분합니다.
 
 ## Accessibility and responsive behavior
 
@@ -47,10 +47,10 @@
 
 - React, TypeScript, Vite, plain CSS
 - UI → `SellerRepository` → persistence 경계를 유지
-- 현재 persistence는 `localStorage`; SQL은 향후 Supabase 저장소가 따라야 할 계약
+- 실제 운영 데이터는 서버 PC의 로컬 PostgreSQL과 SellerAudit 데이터 폴더에 저장합니다. 데모 모드는 별도 `localStorage`를 사용합니다.
 - Channel code는 특정 채널 목록에 고정하지 않음
 - 소스별 실제 원본을 확인하고 필드 의미를 검증하기 전에는 Adapter나 Import schema를 추측하지 않음
 
 ## Open integration inputs
 
-채널 상품목록 7개의 1차 분석은 [원본 분석](docs/SCM_SOURCE_ANALYSIS.md)에 있습니다. 사방넷 Product·SKU·BOM 원본, 일부 채널의 실제 상품·옵션 행, 필드 의미와 Supabase 프로젝트·멤버 프로비저닝 방식은 후속 입력입니다. 이 입력을 확인하기 전에는 현재 Foundation 경계를 확장하지 않습니다.
+채널 상품목록 7개의 1차 분석은 [원본 분석](docs/SCM_SOURCE_ANALYSIS.md)에 있습니다. 새 채널이나 원본 형식을 추가할 때는 실제 상품·옵션 행과 필드 의미를 확인한 뒤 가져오기 규칙을 확장합니다.

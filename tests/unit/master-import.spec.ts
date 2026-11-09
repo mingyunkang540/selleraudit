@@ -108,6 +108,68 @@ test('intermediate bundle rows in a supported category stay deferred from BOM re
   expect(preview.bomComponents[0].status).toBe('ERROR')
 })
 
+test('local policy recognizes only the two approved bundle codes as individual SKUs', async () => {
+  const book=createWorkbook([['100902','세트','혼합세트','Approved bundles','AL510 1개, AL502 1개, AL999 1개',3]])
+  const sheet=book.Sheets['코드DB']
+  XLSX.utils.sheet_add_aoa(sheet,[['5호+채반','라벤더','AL502'],['기타+묶음','라벤더','AL999']],{origin:'C25'})
+  const preview=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx',{approvedBundleSkuCodes:['AL502','AL510']})
+  for(const code of ['AL502','AL510']) {
+    expect(preview.skus.find(sku=>sku.skuCode===code)?.status).toBe('VALID')
+    expect(preview.bomComponents.find(component=>component.skuCode===code)?.status).toBe('VALID')
+    expect(preview.issues.some(issue=>issue.code==='UNKNOWN_SKU' && issue.observedValue===code)).toBe(false)
+  }
+  expect(preview.skus.find(sku=>sku.skuCode==='AL999')?.registryStatus).toBe('DEFERRED_INTERMEDIATE_BUNDLE')
+  expect(preview.issues.some(issue=>issue.code==='UNKNOWN_SKU' && issue.observedValue==='AL999')).toBe(true)
+})
+
+test('local policy recognizes only confirmed categories while leaving other categories deferred', async () => {
+  const book=createWorkbook([['100903','세트','혼합세트','Packaging','E01 1개',1]])
+  const policy={approvedSkuCategories:['기타','스티커','박스(부자재)','아이스 땡스보틀','로켓배송']}
+  const sheet=book.Sheets['코드DB']
+  XLSX.utils.sheet_add_aoa(sheet,[['미확인']],{origin:'B63'})
+  XLSX.utils.sheet_add_aoa(sheet,[['기타상품',null,'U01']],{origin:'C64'})
+  const preview=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx',policy)
+  expect(preview.skus.find(sku=>sku.skuCode==='E01')?.status).toBe('VALID')
+  expect(preview.bomComponents.find(component=>component.skuCode==='E01')?.status).toBe('VALID')
+  expect(preview.skus.find(sku=>sku.skuCode==='U01')?.registryStatus).toBe('DEFERRED_SOURCE_BLOCK')
+  const old=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx')
+  expect(old.skus.find(sku=>sku.skuCode==='E01')?.status).toBe('DEFERRED')
+})
+
+test('local quantity validation expands confirmed bundle contents without changing SKU candidates', async () => {
+  const book=createWorkbook([
+    ['100910','세트','혼합세트','채반 묶음','AL502 1개',2],
+    ['100911','세트','혼합세트','밀큐브 묶음','AL510 1개',7],
+    ['100912','세트','혼합세트','밀큐브 두 묶음','AL510 2개',14],
+    ['100913','세트','혼합세트','틀린 구성수','AL502 1개',3],
+  ])
+  const sheet=book.Sheets['코드DB']
+  XLSX.utils.sheet_add_aoa(sheet,[['5호+채반','라벤더','AL502'],['5호','라벤더','AL05'],['밀큐브','라벤더','AL10']],{origin:'C25'})
+  XLSX.utils.sheet_add_aoa(sheet,[['구성품'],[null,'채반','중','A02']],{origin:'B28'})
+  const policy={approvedBundleSkuCodes:['AL502','AL510'],skuComponents:{AL502:[{skuCode:'AL05',quantity:1},{skuCode:'A02',quantity:1}],AL510:[{skuCode:'AL05',quantity:1},{skuCode:'AL10',quantity:6}]}}
+  const result=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx',policy)
+  expect(result.issues.filter(issue=>issue.code==='BOM_QUANTITY_MISMATCH').map(issue=>issue.sourceRow)).toEqual([9])
+  expect(result.bomComponents.filter(component=>component.productSourceRow===6).map(component=>[component.skuCode,component.quantity])).toEqual([['AL502',1]])
+  expect(result.bomComponents.filter(component=>component.productSourceRow===8).map(component=>[component.skuCode,component.quantity])).toEqual([['AL510',2]])
+  const defaultResult=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx',{approvedBundleSkuCodes:['AL502','AL510']})
+  expect(defaultResult.issues.filter(issue=>issue.code==='BOM_QUANTITY_MISMATCH').map(issue=>issue.sourceRow)).toContain(6)
+  const incomplete=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx',{...policy,skuComponents:{AL502:[{skuCode:'NOTFOUND',quantity:1}]}})
+  expect(incomplete.issues.some(issue=>issue.code==='BUNDLE_COMPOSITION_INVALID'&&issue.sourceRow===6)).toBe(true)
+  const cycle=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx',{...policy,skuComponents:{AL502:[{skuCode:'AL502',quantity:1}]}})
+  expect(cycle.issues.some(issue=>issue.code==='BUNDLE_COMPOSITION_INVALID'&&issue.sourceRow===6)).toBe(true)
+})
+
+test('confirmed sticker and box SKUs remain in the BOM but do not count as product units',async()=>{
+  const book=createWorkbook([['100920','세트','혼합세트','포장 포함','AL00 1개, SP22 2개, E01 2개',1]])
+  XLSX.utils.sheet_add_aoa(book.Sheets['코드DB'],[['스티커'],[null,'스티커',null,'SP22']],{origin:'B63'})
+  const policy={approvedSkuCategories:['스티커','박스(부자재)'],nonCountedSkuCodes:['SP22','E01']}
+  const result=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx',policy)
+  expect(result.issues.some(issue=>issue.code==='BOM_QUANTITY_MISMATCH')).toBe(false)
+  expect(result.bomComponents.map(item=>[item.skuCode,item.quantity])).toEqual([['AL00',1],['SP22',2],['E01',2]])
+  const withoutPolicy=await analyzeMasterWorkbook(toArrayBuffer(book),'fixture.xlsx',{approvedSkuCategories:policy.approvedSkuCategories})
+  expect(withoutPolicy.issues.some(issue=>issue.code==='BOM_QUANTITY_MISMATCH')).toBe(true)
+})
+
 test('non-empty non-numeric source quantity is invalid data rather than a missing field', async () => {
   const preview = await analyzeMasterWorkbook(toArrayBuffer(createWorkbook([
     ['100901', '단품', '냉동용기', 'Invalid quantity type', 'AL00 1개', 'not-a-number'],

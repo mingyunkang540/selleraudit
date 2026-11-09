@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Layout, type WorkspaceAccess } from './components/Layout'
 import { EmptyState, PageHeader } from './components/ui'
 import { Icon } from './components/Icon'
 import { Dashboard } from './features/dashboard/Dashboard'
+import { SalesDashboard } from './features/sales/SalesDashboard'
+import { ProductSalesAnalysis } from './features/sales/ProductSalesAnalysis'
 import { ProductDetail, ProductMaster } from './features/products'
 import { SkuMaster } from './features/skus'
 import { ChannelMatrix } from './features/channels'
@@ -10,6 +12,7 @@ import { MappingCenter } from './features/mapping'
 import { AuditCenter } from './features/audit'
 import { MasterImport } from './features/import/MasterImport'
 import { Login } from './features/auth/Login'
+import { LocalAuth, type LocalSession } from './features/auth/LocalAuth'
 import { Settings } from './pages/Settings'
 import { useRoute } from './hooks/useRoute'
 import { getDataSourceConfig, getSupabaseClient } from './lib/supabase'
@@ -17,8 +20,11 @@ import { canWrite, loadActiveWorkspaces, type ActiveWorkspace } from './services
 import { createMockRepository } from './services/mockRepository'
 import { createSupabaseRepository } from './services/supabaseRepository'
 import { createImportPersistence, type ImportPersistence } from './services/importPersistence'
+import { createLocalImportPersistence } from './services/localImportPersistence'
 import type { SellerRepository } from './services/repository'
 import type { IssueStatus, SellerData } from './types/domain'
+import type {ConfigurationData,ConfigurationPrices} from './features/products/configurationTypes'
+import type {ProductEditInput} from './features/products/ProductEditor'
 
 const selectedWorkspaceKey = (userId: string) => `seller-audit:selected-workspace:${userId}`
 
@@ -30,37 +36,75 @@ function ErrorState({ message, retry, loading, hint, onLogout }: { message: stri
   return <div className="app-error"><Icon name="alert" size={36} /><h1>데이터를 불러오지 못했습니다</h1><p role="alert">{message}</p>{hint && <p className="muted">{hint}</p>}{retry && <button className="button button-primary" disabled={loading} onClick={retry}><Icon name="refresh" size={16} />{loading ? '확인 중…' : '다시 시도'}</button>}{onLogout && <button className="button" onClick={onLogout}>로그아웃</button>}</div>
 }
 
-function WorkspaceView({ data, repository, onData, access, importPersistence }: {
+function WorkspaceView({ data, repository, onData, access, importPersistence, readOnly = false }: {
   data: SellerData
   repository: SellerRepository
   onData: (data: SellerData) => void
   access?: WorkspaceAccess
   importPersistence?: ImportPersistence
+  readOnly?: boolean
 }) {
   const route = useRoute()
+  const [configurations,setConfigurations]=useState<ConfigurationData|null>(null)
+  const [configurationError,setConfigurationError]=useState(false)
+  const local=access?.mode==='local'
+  const refreshConfigurations=useCallback(async()=>{const response=await fetch('/api/product-configurations',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error('상품 구성 옵션을 불러오지 못했습니다.');setConfigurations(await response.json() as ConfigurationData);setConfigurationError(false)},[])
+  useEffect(()=>{if(!local)return;void Promise.resolve().then(refreshConfigurations).catch(()=>setConfigurationError(true))},[local,refreshConfigurations])
+  const configurationWrite=async(path:string,body:object)=>{const sessionResponse=await fetch('/api/auth/session',{credentials:'same-origin',cache:'no-store'});if(!sessionResponse.ok)throw new Error('세션을 확인하지 못했습니다.');const session=await sessionResponse.json() as {csrf:string};const response=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify(body)});if(!response.ok)throw new Error('저장하지 못했습니다. 입력값과 권한을 확인해 주세요.');await refreshConfigurations()}
   const path = route.split('?')[0]
-  const editable = !access || canWrite(access.role)
+  const editable = (!access || canWrite(access.role)) && !readOnly
   const onMap = async (offerId: string, productId: string) => {
     if (!editable) throw new Error('이 작업을 수행할 권한이 없습니다.')
     onData(await repository.mapOffer(offerId, productId))
+    if(local)await refreshConfigurations()
   }
   const onUpdateIssue = async (issueId: string, status: IssueStatus) => {
     if (!editable) throw new Error('이 작업을 수행할 권한이 없습니다.')
     onData(await repository.updateIssueStatus(issueId, status))
   }
+  const onArchiveOffer=local&&editable?async(offerId:string)=>{const response=await fetch('/api/auth/session',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error('세션을 확인할 수 없습니다.');const session=await response.json() as {csrf:string};const result=await fetch('/api/mapping/archive-unmatched',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify({offerId})});if(!result.ok)throw new Error('품목이 변경되었거나 삭제하지 못했습니다. 새로고침 후 확인해 주세요.');onData(await repository.load())}:undefined
   let page
-  if (path === '/dashboard' || path === '/') page = <Dashboard data={data} />
-  else if (path === '/products') page = <ProductMaster data={data} />
-  else if (path.startsWith('/products/')) page = <ProductDetail key={path} data={data} productId={path.slice('/products/'.length)} />
+  if (path === '/dashboard' || path === '/') page = <Dashboard data={data} local={local} configurationData={configurations} configurationError={configurationError} />
+  else if (path === '/sales') page = <SalesDashboard local={local} />
+  else if (path === '/product-sales') page = <ProductSalesAnalysis local={local} />
+  else if (path === '/products') page = <ProductMaster data={data} local={local} readOnly={!editable} onSaveProduct={local&&editable?async (input:ProductEditInput)=>{const s=await fetch('/api/auth/session',{credentials:'same-origin',cache:'no-store'});if(!s.ok)throw new Error('세션을 확인하지 못했습니다.');const session=await s.json() as {csrf:string};const response=await fetch('/api/product-master',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify(input)});if(!response.ok)throw new Error('상품을 저장하지 못했습니다. 품번 중복 여부를 확인하고 새로고침해 주세요.');onData(await repository.load())}:undefined} />
+  else if (path.startsWith('/products/')) page = <ProductDetail key={path} data={data} productId={path.slice('/products/'.length)} local={local} readOnly={!editable} configurations={configurations?.configurations??[]} configurationData={configurations} configurationError={configurationError} onSaveConfiguration={async (input:{id?:string;productId:string;name:string;prices:ConfigurationPrices;components:{skuId:string;quantity:number}[]})=>configurationWrite('/api/product-configurations',input)} />
   else if (path === '/skus') page = <SkuMaster data={data} />
-  else if (path === '/channels') page = <ChannelMatrix data={data} />
-  else if (path === '/mapping') page = <MappingCenter data={data} onMap={onMap} readOnly={!editable} showDemoRecommendations={!access} />
-  else if (path === '/audit') page = <AuditCenter key={route} data={data} onUpdateIssue={onUpdateIssue} readOnly={!editable} />
-  else if (path === '/import/master' && editable) page = <MasterImport persistence={importPersistence} role={access?.role === 'EDITOR' ? 'EDITOR' : 'ADMIN'} />
+  else if (path === '/channels') page = <ChannelMatrix data={data} local={local} configurationData={configurations} configurationError={configurationError} onBindConfiguration={editable&&local?async(offerId,configurationId)=>{await configurationWrite('/api/mapping/configuration',{offerId,configurationId});onData(await repository.load())}:undefined} onUnmap={local && editable ? async (offerId, productId) => { const response=await fetch('/api/auth/session',{credentials:'same-origin',cache:'no-store'}); if(!response.ok)throw new Error('세션을 확인할 수 없습니다.'); const session=await response.json() as {csrf:string}; const result=await fetch('/api/mapping/unmap',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify({offerId,productId})}); if(!result.ok)throw new Error('매핑 해제에 실패했습니다. 다시 확인해 주세요.'); await refreshConfigurations();onData(await repository.load()) } : undefined} />
+  else if (path === '/mapping') page = <MappingCenter data={data} onMap={onMap} onArchiveOffer={onArchiveOffer} configurations={configurations?.configurations??[]} configurationAvailable={!local||(!configurationError&&configurations!==null)} onMapConfiguration={local&&editable?async(offerId,configurationId)=>{await configurationWrite('/api/mapping/configuration',{offerId,configurationId});onData(await repository.load())}:undefined} readOnly={!editable} showDemoRecommendations={!access} local={local} onArchive={local && editable ? async (offerIds) => {const response=await fetch('/api/auth/session',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error('세션을 확인할 수 없습니다.');const session=await response.json() as {csrf:string};const result=await fetch('/api/mapping/archive-inactive',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify({offerIds})});if(!result.ok)throw new Error('옵션의 상태가 변경되었거나 삭제에 실패했습니다. 새로고침 후 다시 확인해 주세요.');onData(await repository.load())} : undefined} />
+  else if (path === '/audit') page = <AuditCenter key={route} data={data} onUpdateIssue={onUpdateIssue} readOnly={!editable} onDeleteIssues={local&&editable?async(issueIds)=>{const response=await fetch('/api/auth/session',{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error('세션을 확인할 수 없습니다.');const session=await response.json() as {csrf:string};const result=await fetch('/api/issues/archive',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify({issueIds})});if(!result.ok)throw new Error('이슈를 삭제하지 못했습니다. 새로고침 후 다시 확인해 주세요.');onData(await repository.load())}:undefined} />
+  else if (path === '/import/master' && access?.mode === 'local' && !importPersistence) page = <><PageHeader title="준비 중입니다" description="로컬 Master Import 기능을 준비하고 있습니다." /></>
+  else if (path === '/import/master' && editable) page = <MasterImport persistence={importPersistence} role={access?.role === 'EDITOR' ? 'EDITOR' : 'ADMIN'} localPolicy={access?.mode === 'local'} onMasterApplied={access?.onRefresh} />
   else if (path === '/import/master') page = <><PageHeader title="접근할 수 없습니다" description="이 워크스페이스에서는 데이터 가져오기를 실행할 수 없습니다." /><div className="panel"><EmptyState title="읽기 전용 계정입니다" /></div></>
   else if (path === '/settings/channels' || path === '/settings/workspace') page = <Settings data={data} section={path.split('/')[2]} mode={access?.mode ?? 'mock'} />
   else page = <><PageHeader title="페이지를 찾을 수 없습니다" description="주소를 확인하거나 대시보드로 이동해 주세요." /><div className="panel"><EmptyState title="요청한 페이지가 없습니다" action={<a className="button button-primary" href="#/dashboard">대시보드로 이동</a>} /></div></>
   return <Layout data={data} route={route} access={access}>{page}</Layout>
+}
+
+function LocalWorkspace({session,onBack}:{session:LocalSession;onBack:()=>void}) {
+  const [data,setData]=useState<SellerData|null>(null)
+  const [error,setError]=useState(false)
+  const importPersistence=useMemo(()=>session.importEnabled?createLocalImportPersistence(session.user.workspaceId,session.csrf):undefined,[session.importEnabled,session.user.workspaceId,session.csrf])
+  const refresh=useCallback(async()=>{
+    try { const response=await fetch('/api/data',{cache:'no-store',credentials:'same-origin'});if(!response.ok)throw new Error('unavailable');setData(await response.json() as SellerData);setError(false) }
+    catch {setError(true)}
+  },[])
+  useEffect(()=>{void Promise.resolve().then(refresh)},[refresh])
+  if(error)return <ErrorState message="로컬 데이터를 불러오지 못했습니다." retry={()=>void refresh()} onLogout={onBack}/>
+  if(!data)return <LoadingState message="로컬 상품 데이터를 불러오고 있습니다…" />
+  const load=async():Promise<SellerData>=>{
+    const response=await fetch('/api/data',{cache:'no-store',credentials:'same-origin'})
+    if(!response.ok)throw new Error('로컬 데이터를 불러오지 못했습니다.')
+    return response.json() as Promise<SellerData>
+  }
+  const write=async(path:string,body:object):Promise<SellerData>=>{
+    const response=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':session.csrf},body:JSON.stringify(body)})
+    if(!response.ok)throw new Error('변경하지 못했습니다. 현재 권한과 데이터를 확인해 주세요.')
+    return load()
+  }
+  const repository:SellerRepository={load,mapOffer:(offerId,productId)=>write('/api/mapping',{offerId,productId}),updateIssueStatus:(id,status)=>write(`/api/issues/${encodeURIComponent(id)}/status`,{status})}
+  const access:WorkspaceAccess={mode:'local',role:session.user.role,email:session.user.email,workspaces:[{id:session.user.workspaceId,name:data.workspace.name,role:session.user.role}],selectedWorkspaceId:session.user.workspaceId,onWorkspaceChange:()=>{},onLogout:onBack,onRefresh:()=>void refresh()}
+  return <WorkspaceView data={data} repository={repository} onData={setData} access={access} importPersistence={importPersistence} />
 }
 
 function MockApp() {
@@ -183,7 +227,7 @@ function SupabaseApp() {
     access={access} importPersistence={active.importPersistence} />
 }
 
-function readConfiguration(): { mode: 'mock' | 'supabase'; error: null } | { mode: null; error: string } {
+function readConfiguration(): { mode: 'mock' | 'supabase' | 'local-server'; error: null } | { mode: null; error: string } {
   try {
     const config = getDataSourceConfig()
     return { mode: config.mode, error: null }
@@ -195,5 +239,7 @@ function readConfiguration(): { mode: 'mock' | 'supabase'; error: null } | { mod
 export default function App() {
   const config = readConfiguration()
   if (config.error) return <ErrorState message={config.error} />
-  return config.mode === 'mock' ? <MockApp /> : <SupabaseApp />
+  if (config.mode === 'mock') return <MockApp />
+  if (config.mode === 'local-server') return <LocalAuth renderWorkspace={(session,onBack)=><LocalWorkspace session={session} onBack={onBack}/>} />
+  return <SupabaseApp />
 }

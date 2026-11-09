@@ -175,7 +175,14 @@ function readProducts(sheet: WorkSheet): { rawRows: RawImportRow[]; products: Pr
   return { rawRows, products }
 }
 
-function readSkus(sheet: WorkSheet): { rawRows: RawImportRow[]; skus: SkuCandidate[] } {
+export interface MasterSkuPolicy {
+  approvedBundleSkuCodes?: readonly string[]
+  approvedSkuCategories?: readonly string[]
+  skuComponents?: Readonly<Record<string, readonly {skuCode:string;quantity:number}[]>>
+  nonCountedSkuCodes?: readonly string[]
+}
+
+function readSkus(sheet: WorkSheet, policy: MasterSkuPolicy): { rawRows: RawImportRow[]; skus: SkuCandidate[] } {
   const rawRows: RawImportRow[] = []
   const skus: SkuCandidate[] = []
   const endRow = lastRow(sheet)
@@ -190,12 +197,13 @@ function readSkus(sheet: WorkSheet): { rawRows: RawImportRow[]; skus: SkuCandida
     const hasEvidence = SKU_COLUMNS.some((column) => normalizedText(sheet, `${column}${row}`) != null)
     if (hasEvidence) rawRows.push(captureRow(sheet, '코드DB', row, sourceBlock, SKU_COLUMNS))
     if (!code || !modelName || !/^[★]?[A-Z][A-Z0-9]*$/.test(code)) continue
-    const isSupportedCategory = sourceCategory != null && SUPPORTED_BOM_SKU_CATEGORIES.includes(
+    const approvedCategory = sourceCategory != null && (policy.approvedSkuCategories?.includes(sourceCategory) ?? false)
+    const isSupportedCategory = sourceCategory != null && (approvedCategory || SUPPORTED_BOM_SKU_CATEGORIES.includes(
       sourceCategory as (typeof SUPPORTED_BOM_SKU_CATEGORIES)[number],
-    )
+    ))
     const registryStatus = !isSupportedCategory
       ? 'DEFERRED_SOURCE_BLOCK'
-      : modelName.includes('+')
+      : modelName.includes('+') && !approvedCategory && !(policy.approvedBundleSkuCodes?.includes(code) ?? false)
         ? 'DEFERRED_INTERMEDIATE_BUNDLE'
         : 'BOM_REGISTRY'
 
@@ -218,11 +226,11 @@ function readSkus(sheet: WorkSheet): { rawRows: RawImportRow[]; skus: SkuCandida
   return { rawRows, skus }
 }
 
-export function captureMasterWorkbook(input: ArrayBuffer): MasterWorkbookCapture {
+export function captureMasterWorkbook(input: ArrayBuffer, policy: MasterSkuPolicy = {}): MasterWorkbookCapture {
   const workbook = XLSX.read(input, { type: 'array', cellDates: true, cellFormula: true, cellNF: true, sheetStubs: true })
   const schemaErrors = inspectMasterSchema(workbook)
   const productResult = workbook.Sheets['단가표'] ? readProducts(workbook.Sheets['단가표']) : { rawRows: [], products: [] }
-  const skuResult = workbook.Sheets['코드DB'] ? readSkus(workbook.Sheets['코드DB']) : { rawRows: [], skus: [] }
+  const skuResult = workbook.Sheets['코드DB'] ? readSkus(workbook.Sheets['코드DB'], policy) : { rawRows: [], skus: [] }
 
   return {
     workbook,

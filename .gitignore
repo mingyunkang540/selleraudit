@@ -6,4 +6,19 @@ playwright-report/
 .env.local
 .env.remote-test.local.txt
 .env.ops.local
+.env.local-server
+scripts/비밀번호.txt
 .seller-audit-backups/
+/data/
+/sample/
+/public/product-thumbnails/
+/src/features/products/productThumbnailManifest.json
+__pycache__/
+*.pyc
+*.tsbuildinfo
+# Local one-off account operations and machine-specific launcher
+/scripts/Activate-TeamInitial.mjs
+/scripts/Refresh-Smartstore-20261109.mjs
+/scripts/Verify-SharedInitial.mjs
+/scripts/Verify-SharedTeamLogin.mjs
+/scripts/Run-SellerAudit-Shared.cmd
